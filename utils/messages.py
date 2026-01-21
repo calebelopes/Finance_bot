@@ -6,6 +6,14 @@ start=(
     "- mercado 135,90\n"
     "- cafe da manha 12\n"
 )
+greeting=(
+    "Olá! 👋\n"
+    "Para registrar um gasto/ação, envie: <ação/descrição> <valor>\n"
+    "Exemplos:\n"
+    "- jantar 20,50\n"
+    "- mercado 135,90\n"
+    "- cafe da manha 12\n"
+)
 invalid=(
     "Formato inválido.\n"
     "Use: <ação/descrição> <valor>\n"
