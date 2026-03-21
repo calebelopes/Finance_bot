@@ -1,0 +1,122 @@
+name: CI / CD
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Stage 1: Lint + Test (runs on every push and PR)
+  # -----------------------------------------------------------------------
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: pytest tests/ -v
+
+  # -----------------------------------------------------------------------
+  # Stage 2: Version bump + Git tag (only on push to master)
+  # -----------------------------------------------------------------------
+  version:
+    needs: lint-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump patch version
+        id: bump
+        run: |
+          current=$(cat VERSION | tr -d '[:space:]')
+          IFS='.' read -r major minor patch <<< "$current"
+          patch=$((patch + 1))
+          new_version="${major}.${minor}.${patch}"
+          echo "$new_version" > VERSION
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "Bumped $current → $new_version"
+
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          git commit -m "release: v${{ steps.bump.outputs.new_version }}"
+          git tag "v${{ steps.bump.outputs.new_version }}"
+          git push origin master --tags
+
+  # -----------------------------------------------------------------------
+  # Stage 3: Deploy to Oracle Cloud (only on push to master)
+  # -----------------------------------------------------------------------
+  deploy:
+    needs: version
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Pull latest (includes version bump)
+        run: git pull origin master
+
+      - name: Sync files to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: >-
+            bot/,utils/,dashboard/,tests/,
+            Dockerfile,docker-compose.yml,
+            requirements.txt,requirements-dev.txt,
+            pyproject.toml,VERSION,.env.example
+          target: ~/Finance_bot
+          overwrite: true
+
+      - name: Build and restart containers
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            cd ~/Finance_bot
+            echo "▸ Version: $(cat VERSION)"
+
+            echo "▸ Building containers..."
+            sudo docker compose build --no-cache
+
+            echo "▸ Restarting services..."
+            sudo docker compose up -d
+
+            echo "▸ Waiting for health check..."
+            sleep 20
+            sudo docker compose ps
+
+            echo "✅ Deploy complete!"

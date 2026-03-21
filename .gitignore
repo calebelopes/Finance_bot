@@ -1,38 +1,39 @@
-target/
-!.mvn/wrapper/maven-wrapper.jar
-!**/src/main/**/target/
-!**/src/test/**/target/
- 
-### IntelliJ IDEA ###
-.idea
-*.iws
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
 *.iml
+*.iws
 *.ipr
 
-*/__pycache__/*
- 
- 
-### Eclipse ###
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
- 
-### NetBeans ###
-/nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
-build/
-!**/src/main/**/build/
-!**/src/test/**/build/
- 
-### VS Code ###
-.vscode/
- 
-### Mac OS ###
+# OS
 .DS_Store
+Thumbs.db
+
+# Environment
+.env
+
+# Runtime data
+data/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Ruff
+.ruff_cache/
