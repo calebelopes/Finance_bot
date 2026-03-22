@@ -358,21 +358,15 @@ async def cmd_setpassword(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Toggle admin status. Only the first user in ALLOWED_USERS (the owner) can run this."""
+    """Toggle admin status. Only BOT_OWNER can run this."""
     user = update.effective_user
     if not _is_authorized(user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
     lang = _get_lang(update)
 
-    allowed = os.getenv("ALLOWED_USERS", "").strip()
-    owner_id = None
-    if allowed:
-        first = allowed.split(",")[0].strip()
-        if first.isdigit():
-            owner_id = int(first)
-
-    if owner_id is None or user.id != owner_id:
+    owner_raw = os.getenv("BOT_OWNER", "").strip()
+    if not owner_raw.isdigit() or user.id != int(owner_raw):
         await update.message.reply_text(t("admin_not_allowed", lang))
         return
 
