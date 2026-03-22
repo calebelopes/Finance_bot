@@ -436,7 +436,9 @@ if _is_admin_user:
 
     if _admin_view_active:
         show_admin_panel()
-        _version_file = Path(__file__).resolve().parent.parent / "VERSION"
+        _version_file = Path(__file__).resolve().parent / "VERSION"
+        if not _version_file.exists():
+            _version_file = Path(__file__).resolve().parent.parent / "VERSION"
         _version = _version_file.read_text().strip() if _version_file.exists() else "dev"
         st.sidebar.markdown("---")
         st.sidebar.caption(f"v{_version}")
@@ -862,7 +864,9 @@ st.caption(d("showing", lang, shown=len(display), total=len(df)))
 # Footer
 # ---------------------------------------------------------------------------
 
-_version_file = Path(__file__).resolve().parent.parent / "VERSION"
+_version_file = Path(__file__).resolve().parent / "VERSION"
+if not _version_file.exists():
+    _version_file = Path(__file__).resolve().parent.parent / "VERSION"
 _version = _version_file.read_text().strip() if _version_file.exists() else "dev"
 st.sidebar.markdown("---")
 st.sidebar.caption(f"v{_version}")
