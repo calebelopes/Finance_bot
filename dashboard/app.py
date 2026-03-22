@@ -86,14 +86,17 @@ def _db_conn():
 def verify_login(username: str, password: str) -> dict | None:
     conn = _db_conn()
     row = conn.execute(
-        "SELECT id, username, password_hash, lang FROM users WHERE LOWER(username) = LOWER(?)",
+        "SELECT id, username, password_hash, lang, is_admin FROM users WHERE LOWER(username) = LOWER(?)",
         (username,),
     ).fetchone()
     conn.close()
     if row is None or row["password_hash"] is None:
         return None
     if _verify_hash(password, row["password_hash"]):
-        return {"id": row["id"], "username": row["username"], "lang": row["lang"] or "pt"}
+        return {
+            "id": row["id"], "username": row["username"],
+            "lang": row["lang"] or "pt", "is_admin": bool(row["is_admin"]),
+        }
     return None
 
 
@@ -111,12 +114,15 @@ def _get_user_by_session(token: str) -> dict | None:
         return None
     conn = _db_conn()
     row = conn.execute(
-        "SELECT id, username, lang FROM users WHERE session_token = ?",
+        "SELECT id, username, lang, is_admin FROM users WHERE session_token = ?",
         (token,),
     ).fetchone()
     conn.close()
     if row:
-        return {"id": row["id"], "username": row["username"], "lang": row["lang"] or "pt"}
+        return {
+            "id": row["id"], "username": row["username"],
+            "lang": row["lang"] or "pt", "is_admin": bool(row["is_admin"]),
+        }
     return None
 
 
@@ -192,10 +198,155 @@ current_user = st.session_state["user"]
 user_id: int = current_user["id"]
 display_name: str = current_user["username"] or "user"
 lang: str = current_user.get("lang", "pt")
+_is_admin_user: bool = current_user.get("is_admin", False)
 
 
 def _fmt(value: float) -> str:
     return fmt_currency(value, lang)
+
+
+# ---------------------------------------------------------------------------
+# Admin panel
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=30)
+def _load_admin_user_stats() -> pd.DataFrame:
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("""
+        SELECT
+            u.id,
+            u.username,
+            u.lang,
+            COUNT(a.id) AS total_tx,
+            COALESCE(SUM(CASE WHEN COALESCE(a.type,'expense')='expense' THEN a.value ELSE 0 END), 0) AS total_expenses,
+            COALESCE(SUM(CASE WHEN a.type='income' THEN a.value ELSE 0 END), 0) AS total_income,
+            MIN(a.created_at) AS first_activity,
+            MAX(a.created_at) AS last_activity
+        FROM users u
+        LEFT JOIN actions a ON a.user_id = u.id
+        GROUP BY u.id
+        ORDER BY last_activity DESC
+    """, conn)
+    conn.close()
+    return df
+
+
+@st.cache_data(ttl=30)
+def _load_admin_daily_stats() -> pd.DataFrame:
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("""
+        SELECT
+            DATE(created_at) AS day,
+            COUNT(*) AS tx_count,
+            COUNT(DISTINCT user_id) AS active_users,
+            SUM(CASE WHEN COALESCE(type,'expense')='expense' THEN value ELSE 0 END) AS expenses,
+            SUM(CASE WHEN type='income' THEN value ELSE 0 END) AS income
+        FROM actions
+        GROUP BY day
+        ORDER BY day
+    """, conn)
+    conn.close()
+    if not df.empty:
+        df["day"] = pd.to_datetime(df["day"])
+    return df
+
+
+def show_admin_panel() -> None:
+    st.title(d("admin_title", lang))
+
+    users_df = _load_admin_user_stats()
+    daily_df = _load_admin_daily_stats()
+
+    if users_df.empty:
+        st.info(d("admin_no_data", lang))
+        return
+
+    total_users = len(users_df)
+    d7 = (datetime.now() - timedelta(days=7)).isoformat()
+    d30 = (datetime.now() - timedelta(days=30)).isoformat()
+
+    active_7 = int(users_df[
+        users_df["last_activity"].notna() & (users_df["last_activity"] >= d7)
+    ].shape[0])
+    active_30 = int(users_df[
+        users_df["last_activity"].notna() & (users_df["last_activity"] >= d30)
+    ].shape[0])
+    total_tx = int(users_df["total_tx"].sum())
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric(d("admin_kpi_users", lang), str(total_users))
+    k2.metric(d("admin_kpi_active7", lang), str(active_7))
+    k3.metric(d("admin_kpi_active30", lang), str(active_30))
+    k4.metric(d("admin_kpi_total_tx", lang), str(total_tx))
+
+    st.markdown("---")
+
+    # Daily activity chart
+    if not daily_df.empty:
+        r1c1, r1c2 = st.columns(2)
+
+        with r1c1:
+            st.subheader(d("admin_chart_daily", lang))
+            fig_daily = go.Figure()
+            fig_daily.add_trace(go.Bar(
+                name=d("type_expense", lang),
+                x=daily_df["day"], y=daily_df["expenses"],
+                marker_color="#EF5350",
+            ))
+            fig_daily.add_trace(go.Bar(
+                name=d("type_income", lang),
+                x=daily_df["day"], y=daily_df["income"],
+                marker_color="#4CAF50",
+            ))
+            fig_daily.update_layout(
+                barmode="group",
+                xaxis_title="", yaxis_title=d("currency_axis", lang),
+                margin=dict(l=0, r=0, t=10, b=0),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                legend_title_text="",
+            )
+            st.plotly_chart(fig_daily, use_container_width=True)
+
+        with r1c2:
+            st.subheader(d("admin_chart_users", lang))
+            fig_users = px.area(
+                daily_df, x="day", y="active_users",
+                color_discrete_sequence=["#2196F3"],
+            )
+            fig_users.update_layout(
+                xaxis_title="", yaxis_title=d("admin_kpi_users", lang),
+                margin=dict(l=0, r=0, t=10, b=0),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_users, use_container_width=True)
+
+    st.markdown("---")
+
+    # Users table
+    st.subheader(d("admin_users_table", lang))
+
+    display_df = users_df.copy()
+    display_df["balance"] = display_df["total_income"] - display_df["total_expenses"]
+    display_df["total_expenses"] = display_df["total_expenses"].apply(_fmt)
+    display_df["total_income"] = display_df["total_income"].apply(_fmt)
+    display_df["balance"] = display_df["balance"].apply(_fmt)
+    for col in ("first_activity", "last_activity"):
+        display_df[col] = display_df[col].apply(
+            lambda v: v[:16].replace("T", " ") if pd.notna(v) and v else "—"
+        )
+    display_df = display_df[[
+        "username", "lang", "total_tx",
+        "total_expenses", "total_income", "balance",
+        "first_activity", "last_activity",
+    ]]
+    display_df.columns = [
+        d("admin_col_user", lang), d("admin_col_lang", lang), d("admin_col_tx", lang),
+        d("admin_col_expenses", lang), d("admin_col_income", lang), d("admin_col_balance", lang),
+        d("admin_col_first", lang), d("admin_col_last", lang),
+    ]
+    st.dataframe(display_df, use_container_width=True, hide_index=True, height=400)
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +422,25 @@ if st.sidebar.button(d("sidebar_logout", lang), use_container_width=True):
     _delete_cookie(_COOKIE_NAME)
     del st.session_state["user"]
     st.rerun()
+
+if _is_admin_user:
+    st.sidebar.markdown("---")
+    _view_options = [d("admin_switch_personal", lang), d("admin_switch_admin", lang)]
+    _view_default = 1 if st.session_state.get("admin_view", False) else 0
+    _selected_view = st.sidebar.radio(
+        "🛡️", _view_options, index=_view_default,
+        horizontal=True, label_visibility="collapsed",
+    )
+    _admin_view_active = _selected_view == _view_options[1]
+    st.session_state["admin_view"] = _admin_view_active
+
+    if _admin_view_active:
+        show_admin_panel()
+        _version_file = Path(__file__).resolve().parent.parent / "VERSION"
+        _version = _version_file.read_text().strip() if _version_file.exists() else "dev"
+        st.sidebar.markdown("---")
+        st.sidebar.caption(f"v{_version}")
+        st.stop()
 
 st.sidebar.markdown("---")
 

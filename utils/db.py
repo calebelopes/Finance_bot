@@ -97,6 +97,8 @@ def setup_database() -> None:
             cur.execute("ALTER TABLE users ADD COLUMN lang TEXT DEFAULT 'pt';")
         if "session_token" not in user_cols:
             cur.execute("ALTER TABLE users ADD COLUMN session_token TEXT;")
+        if "is_admin" not in user_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;")
 
         cols = _table_columns(conn, "actions")
         if "user_id" not in cols:
@@ -282,17 +284,20 @@ def set_password(user_id: int, password: str) -> None:
 def authenticate_user(username: str, password: str) -> dict | None:
     """
     Verify username + password.
-    Returns {"id": ..., "username": ..., "lang": ...} on success, None otherwise.
+    Returns {"id": ..., "username": ..., "lang": ..., "is_admin": ...} on success, None otherwise.
     """
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, username, password_hash, lang FROM users WHERE LOWER(username) = LOWER(?)",
+            "SELECT id, username, password_hash, lang, is_admin FROM users WHERE LOWER(username) = LOWER(?)",
             (username,),
         ).fetchone()
     if row is None or row["password_hash"] is None:
         return None
     if _verify_password_hash(password, row["password_hash"]):
-        return {"id": row["id"], "username": row["username"], "lang": row["lang"] or "pt"}
+        return {
+            "id": row["id"], "username": row["username"],
+            "lang": row["lang"] or "pt", "is_admin": bool(row["is_admin"]),
+        }
     return None
 
 
@@ -341,11 +346,14 @@ def get_user_by_session(token: str) -> dict | None:
         return None
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, username, lang FROM users WHERE session_token = ?",
+            "SELECT id, username, lang, is_admin FROM users WHERE session_token = ?",
             (token,),
         ).fetchone()
     if row:
-        return {"id": row["id"], "username": row["username"], "lang": row["lang"] or "pt"}
+        return {
+            "id": row["id"], "username": row["username"],
+            "lang": row["lang"] or "pt", "is_admin": bool(row["is_admin"]),
+        }
     return None
 
 
@@ -353,3 +361,57 @@ def clear_session(user_id: int) -> None:
     with _connect() as conn:
         conn.execute("UPDATE users SET session_token = NULL WHERE id = ?", (user_id,))
         conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Admin
+# ---------------------------------------------------------------------------
+
+def set_admin(user_id: int, is_admin: bool = True) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE users SET is_admin = ? WHERE id = ?", (int(is_admin), user_id))
+        conn.commit()
+
+
+def is_admin(user_id: int) -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT is_admin FROM users WHERE id = ?", (user_id,)).fetchone()
+    return bool(row and row["is_admin"])
+
+
+def get_all_users_stats() -> list[dict]:
+    """Return per-user statistics for the admin dashboard."""
+    with _connect() as conn:
+        rows = conn.execute("""
+            SELECT
+                u.id,
+                u.username,
+                u.lang,
+                COUNT(a.id) AS total_tx,
+                COALESCE(SUM(CASE WHEN a.type='expense' THEN a.value ELSE 0 END), 0) AS total_expenses,
+                COALESCE(SUM(CASE WHEN a.type='income' THEN a.value ELSE 0 END), 0) AS total_income,
+                MIN(a.created_at) AS first_activity,
+                MAX(a.created_at) AS last_activity
+            FROM users u
+            LEFT JOIN actions a ON a.user_id = u.id
+            GROUP BY u.id
+            ORDER BY last_activity DESC
+        """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_platform_daily_stats() -> list[dict]:
+    """Return daily transaction counts and totals across all users."""
+    with _connect() as conn:
+        rows = conn.execute("""
+            SELECT
+                DATE(created_at) AS day,
+                COUNT(*) AS tx_count,
+                COUNT(DISTINCT user_id) AS active_users,
+                SUM(CASE WHEN COALESCE(type,'expense')='expense' THEN value ELSE 0 END) AS expenses,
+                SUM(CASE WHEN type='income' THEN value ELSE 0 END) AS income
+            FROM actions
+            GROUP BY day
+            ORDER BY day
+        """).fetchall()
+    return [dict(r) for r in rows]

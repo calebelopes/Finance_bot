@@ -357,6 +357,35 @@ async def cmd_setpassword(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(t("error", lang))
 
 
+async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle admin status. Only the first user in ALLOWED_USERS (the owner) can run this."""
+    user = update.effective_user
+    if not _is_authorized(user.id):
+        await update.message.reply_text(t("unauthorized", "pt"))
+        return
+    lang = _get_lang(update)
+
+    allowed = os.getenv("ALLOWED_USERS", "").strip()
+    owner_id = None
+    if allowed:
+        first = allowed.split(",")[0].strip()
+        if first.isdigit():
+            owner_id = int(first)
+
+    if owner_id is None or user.id != owner_id:
+        await update.message.reply_text(t("admin_not_allowed", lang))
+        return
+
+    target_id = user.id
+    if context.args and context.args[0].isdigit():
+        target_id = int(context.args[0])
+
+    currently_admin = db.is_admin(target_id)
+    db.set_admin(target_id, not currently_admin)
+    msg_key = "admin_revoked" if currently_admin else "admin_granted"
+    await update.message.reply_text(t(msg_key, lang))
+
+
 async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not _is_authorized(user.id):
@@ -491,6 +520,7 @@ def main() -> None:
     application.add_handler(CommandHandler("delete", cmd_delete))
     application.add_handler(CommandHandler("edit", cmd_edit))
     application.add_handler(CommandHandler("setpassword", cmd_setpassword))
+    application.add_handler(CommandHandler("admin", cmd_admin))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     application.run_polling()
