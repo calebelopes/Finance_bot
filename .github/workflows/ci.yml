@@ -108,6 +108,11 @@ jobs:
             cd ~/Finance_bot
             echo "▸ Version: $(cat VERSION)"
 
+            echo "▸ Backing up database..."
+            if [ -f data/data.db ]; then
+              cp data/data.db "data/data.db.bak.$(date +%Y%m%d_%H%M%S)"
+            fi
+
             echo "▸ Building containers..."
             sudo docker compose build --no-cache
 

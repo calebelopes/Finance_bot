@@ -113,27 +113,27 @@ def _utc_to_local_str(utc_iso: str) -> str:
     return dt.astimezone(tz).strftime("%H:%M")
 
 
-def _format_actions_list(actions: list[dict], title: str, lang: str) -> str:
-    if not actions:
+def _format_transactions(transactions: list[dict], title: str, lang: str) -> str:
+    if not transactions:
         return f"{title}\n\n{t('no_expenses', lang)}"
 
     lines = [title, ""]
     total_expense = 0.0
     total_income = 0.0
-    for a in actions:
-        action_type = a.get("type", "expense")
-        is_income = action_type == "income"
+    for tx in transactions:
+        tx_type = tx.get("type", "expense")
+        is_income = tx_type == "income"
         icon = "🟢" if is_income else "🔴"
         if is_income:
-            total_income += a["value"]
+            total_income += tx["amount_original"]
         else:
-            total_expense += a["value"]
-        value_str = fmt_currency(a["value"], lang)
-        time_str = _utc_to_local_str(a["created_at"])
-        cat_display = cat_name(a["category"], lang)
+            total_expense += tx["amount_original"]
+        value_str = fmt_currency(tx["amount_original"], lang)
+        time_str = _utc_to_local_str(tx["created_at"])
+        cat_display = cat_name(tx["category"], lang)
         sign = "+" if is_income else "-"
         lines.append(
-            f"  {icon} #{a['id']}  [{time_str}]  {a['action']}: {sign}{value_str}  [{cat_display}]"
+            f"  {icon} #{tx['id']}  [{time_str}]  {tx['description']}: {sign}{value_str}  [{cat_display}]"
         )
 
     lines.append("")
@@ -207,10 +207,10 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = _get_lang(update)
     try:
         start_utc, end_utc = _period_range_utc("today")
-        actions = db.get_actions(user.id, start_utc, end_utc)
+        txs = db.get_transactions(user.id, start_utc, end_utc)
         now_local = datetime.datetime.now(_get_timezone())
         title = t("today_title", lang, date=now_local.strftime("%d/%m/%Y"))
-        await update.message.reply_text(_format_actions_list(actions, title, lang))
+        await update.message.reply_text(_format_transactions(txs, title, lang))
     except Exception:
         log.exception("Error in /today")
         await update.message.reply_text(t("error", lang))
@@ -224,9 +224,9 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = _get_lang(update)
     try:
         start_utc, end_utc = _period_range_utc("week")
-        actions = db.get_actions(user.id, start_utc, end_utc)
+        txs = db.get_transactions(user.id, start_utc, end_utc)
         title = t("week_title", lang)
-        await update.message.reply_text(_format_actions_list(actions, title, lang))
+        await update.message.reply_text(_format_transactions(txs, title, lang))
     except Exception:
         log.exception("Error in /week")
         await update.message.reply_text(t("error", lang))
@@ -240,11 +240,11 @@ async def cmd_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = _get_lang(update)
     try:
         start_utc, end_utc = _period_range_utc("month")
-        actions = db.get_actions(user.id, start_utc, end_utc)
+        txs = db.get_transactions(user.id, start_utc, end_utc)
         now_local = datetime.datetime.now(_get_timezone())
         month_name = MONTHS[lang][now_local.month]
         title = t("month_title", lang, month=month_name, year=now_local.year)
-        await update.message.reply_text(_format_actions_list(actions, title, lang))
+        await update.message.reply_text(_format_transactions(txs, title, lang))
     except Exception:
         log.exception("Error in /month")
         await update.message.reply_text(t("error", lang))
@@ -312,15 +312,15 @@ async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text(t("delete_usage", lang))
             return
         try:
-            action_id = int(context.args[0])
+            tx_id = int(context.args[0])
         except ValueError:
             await update.message.reply_text(t("delete_usage", lang))
             return
 
-        if db.delete_action(user.id, action_id):
-            await update.message.reply_text(t("deleted", lang, id=action_id))
+        if db.delete_transaction(user.id, tx_id):
+            await update.message.reply_text(t("deleted", lang, id=tx_id))
         else:
-            await update.message.reply_text(t("delete_not_found", lang, id=action_id))
+            await update.message.reply_text(t("delete_not_found", lang, id=tx_id))
     except Exception:
         log.exception("Error in /delete")
         await update.message.reply_text(t("error", lang))
@@ -391,7 +391,7 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(t("edit_usage", lang))
             return
         try:
-            action_id = int(context.args[0])
+            tx_id = int(context.args[0])
         except ValueError:
             await update.message.reply_text(t("edit_usage", lang))
             return
@@ -401,12 +401,12 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(t("edit_usage", lang))
             return
 
-        if db.edit_action_value(user.id, action_id, new_value):
+        if db.edit_transaction(user.id, tx_id, new_value):
             await update.message.reply_text(
-                t("edited", lang, id=action_id, value=fmt_currency(new_value, lang))
+                t("edited", lang, id=tx_id, value=fmt_currency(new_value, lang))
             )
         else:
-            await update.message.reply_text(t("edit_not_found", lang, id=action_id))
+            await update.message.reply_text(t("edit_not_found", lang, id=tx_id))
     except Exception:
         log.exception("Error in /edit")
         await update.message.reply_text(t("error", lang))
@@ -439,26 +439,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     action_type = "income" if is_income else "expense"
 
     try:
-        action, value = parse_action_value(parse_text)
+        description, value = parse_action_value(parse_text)
     except ValueError:
         await update.message.reply_text(t("invalid", lang))
         return
 
     try:
-        category = categories.infer_category(action, action_type)
-        action_id = db.store_action(user.id, user.username, action, value, category, action_type)
+        category = categories.infer_category(description, action_type)
+        tx_id = db.store_transaction(
+            user.id, user.username, description, value, category, action_type,
+        )
         value_str = fmt_currency(value, lang)
         cat_display = cat_name(category, lang)
         msg_key = "stored_income" if is_income else "stored_expense"
         await update.message.reply_text(
-            t(msg_key, lang, id=action_id, action=action, value=value_str, category=cat_display)
+            t(msg_key, lang, id=tx_id, description=description, value=value_str, category=cat_display)
         )
         log.info(
             "Stored #%d [%s] for %s (%d): %s = %.2f [%s]",
-            action_id, action_type, user.username, user.id, action, value, category,
+            tx_id, action_type, user.username, user.id, description, value, category,
         )
     except Exception:
-        log.exception("Error storing action for user %d", user.id)
+        log.exception("Error storing transaction for user %d", user.id)
         await update.message.reply_text(t("error", lang))
 
 
@@ -503,18 +505,19 @@ def main() -> None:
         .build()
     )
 
+    # Multilingual command aliases (pt / en / ja)
     application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(CommandHandler("help", cmd_help))
-    application.add_handler(CommandHandler("lang", cmd_lang))
+    application.add_handler(CommandHandler(["help", "ajuda", "tasukete"], cmd_help))
+    application.add_handler(CommandHandler(["lang", "idioma", "gengo"], cmd_lang))
     application.add_handler(CallbackQueryHandler(cb_lang, pattern=r"^lang:"))
-    application.add_handler(CommandHandler("today", cmd_today))
-    application.add_handler(CommandHandler("week", cmd_week))
-    application.add_handler(CommandHandler("month", cmd_month))
-    application.add_handler(CommandHandler("summary", cmd_summary))
-    application.add_handler(CommandHandler("delete", cmd_delete))
-    application.add_handler(CommandHandler("edit", cmd_edit))
-    application.add_handler(CommandHandler("setpassword", cmd_setpassword))
-    application.add_handler(CommandHandler("admin", cmd_admin))
+    application.add_handler(CommandHandler(["today", "hoje", "kyou"], cmd_today))
+    application.add_handler(CommandHandler(["week", "semana", "shuu"], cmd_week))
+    application.add_handler(CommandHandler(["month", "mes", "tsuki"], cmd_month))
+    application.add_handler(CommandHandler(["summary", "resumo", "matome"], cmd_summary))
+    application.add_handler(CommandHandler(["delete", "excluir", "sakujo"], cmd_delete))
+    application.add_handler(CommandHandler(["edit", "editar", "henshuu"], cmd_edit))
+    application.add_handler(CommandHandler(["setpassword", "senha", "password"], cmd_setpassword))
+    application.add_handler(CommandHandler(["admin", "kanri"], cmd_admin))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     application.run_polling()

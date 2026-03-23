@@ -16,6 +16,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from utils.db import setup_database  # noqa: E402
 from utils.i18n import (  # noqa: E402
     LANG_LABELS,
     MONTHS,
@@ -29,6 +30,9 @@ from utils.i18n import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 st.set_page_config(page_title="Finance Dashboard", page_icon="💰", layout="wide")
+
+# Ensure schema is migrated (safe if bot already did it -- all migrations are idempotent)
+setup_database()
 
 DB_PATH = os.getenv(
     "DB_PATH",
@@ -180,7 +184,7 @@ def show_login_page():
 
 
 # ---------------------------------------------------------------------------
-# Auth gate: check cookie → restore session on refresh
+# Auth gate: check cookie -> restore session on refresh
 # ---------------------------------------------------------------------------
 
 if "user" not in st.session_state:
@@ -217,13 +221,15 @@ def _load_admin_user_stats() -> pd.DataFrame:
             u.id,
             u.username,
             u.lang,
-            COUNT(a.id) AS total_tx,
-            COALESCE(SUM(CASE WHEN COALESCE(a.type,'expense')='expense' THEN a.value ELSE 0 END), 0) AS total_expenses,
-            COALESCE(SUM(CASE WHEN a.type='income' THEN a.value ELSE 0 END), 0) AS total_income,
-            MIN(a.created_at) AS first_activity,
-            MAX(a.created_at) AS last_activity
+            COUNT(t.id) AS total_tx,
+            COALESCE(SUM(CASE WHEN COALESCE(t.type,'expense')='expense'
+                         THEN t.amount_original ELSE 0 END), 0) AS total_expenses,
+            COALESCE(SUM(CASE WHEN t.type='income'
+                         THEN t.amount_original ELSE 0 END), 0) AS total_income,
+            MIN(t.created_at) AS first_activity,
+            MAX(t.created_at) AS last_activity
         FROM users u
-        LEFT JOIN actions a ON a.user_id = u.id
+        LEFT JOIN transactions t ON t.user_id = u.id AND COALESCE(t.status,'confirmed') != 'deleted'
         GROUP BY u.id
         ORDER BY last_activity DESC
     """, conn)
@@ -239,9 +245,11 @@ def _load_admin_daily_stats() -> pd.DataFrame:
             DATE(created_at) AS day,
             COUNT(*) AS tx_count,
             COUNT(DISTINCT user_id) AS active_users,
-            SUM(CASE WHEN COALESCE(type,'expense')='expense' THEN value ELSE 0 END) AS expenses,
-            SUM(CASE WHEN type='income' THEN value ELSE 0 END) AS income
-        FROM actions
+            SUM(CASE WHEN COALESCE(type,'expense')='expense'
+                THEN amount_original ELSE 0 END) AS expenses,
+            SUM(CASE WHEN type='income' THEN amount_original ELSE 0 END) AS income
+        FROM transactions
+        WHERE COALESCE(status,'confirmed') != 'deleted'
         GROUP BY day
         ORDER BY day
     """, conn)
@@ -281,7 +289,6 @@ def show_admin_panel() -> None:
 
     st.markdown("---")
 
-    # Daily activity chart
     if not daily_df.empty:
         r1c1, r1c2 = st.columns(2)
 
@@ -324,7 +331,6 @@ def show_admin_panel() -> None:
 
     st.markdown("---")
 
-    # Users table
     st.subheader(d("admin_users_table", lang))
 
     display_df = users_df.copy()
@@ -354,15 +360,16 @@ def show_admin_panel() -> None:
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=30)
-def load_actions(_user_id: int, start_iso: str, end_iso: str) -> pd.DataFrame:
+def load_transactions(_user_id: int, start_iso: str, end_iso: str) -> pd.DataFrame:
     conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query(
         """
-        SELECT a.id, a.action, a.value, a.category,
-               COALESCE(a.type, 'expense') AS type, a.created_at
-        FROM actions a
-        WHERE a.user_id = ? AND a.created_at >= ? AND a.created_at < ?
-        ORDER BY a.created_at DESC
+        SELECT t.id, t.description, t.amount_original, t.category,
+               COALESCE(t.type, 'expense') AS type, t.created_at
+        FROM transactions t
+        WHERE t.user_id = ? AND t.created_at >= ? AND t.created_at < ?
+          AND COALESCE(t.status, 'confirmed') != 'deleted'
+        ORDER BY t.created_at DESC
         """,
         conn,
         params=[_user_id, start_iso, end_iso],
@@ -380,10 +387,11 @@ def load_monthly_totals(_user_id: int) -> pd.DataFrame:
     df = pd.read_sql_query(
         """
         SELECT strftime('%Y-%m', created_at) AS month,
-               SUM(CASE WHEN COALESCE(type,'expense')='expense' THEN value ELSE 0 END) AS expenses,
-               SUM(CASE WHEN type='income' THEN value ELSE 0 END) AS income
-        FROM actions
-        WHERE user_id = ?
+               SUM(CASE WHEN COALESCE(type,'expense')='expense'
+                   THEN amount_original ELSE 0 END) AS expenses,
+               SUM(CASE WHEN type='income' THEN amount_original ELSE 0 END) AS income
+        FROM transactions
+        WHERE user_id = ? AND COALESCE(status,'confirmed') != 'deleted'
         GROUP BY month
         ORDER BY month DESC
         LIMIT 12
@@ -448,7 +456,6 @@ st.sidebar.markdown("---")
 
 today = date.today()
 
-# Quick period presets
 _QUICK_KEYS = [
     "quick_today", "quick_week", "quick_month", "quick_last_month",
     "quick_3months", "quick_6months", "quick_year", "quick_custom",
@@ -509,7 +516,6 @@ if _quick_key == "quick_custom":
     else:
         start_date = end_date = date_range
 
-# Compute comparison period (same length, immediately before)
 period_days = (end_date - start_date).days + 1
 prev_end = start_date - timedelta(days=1)
 prev_start = prev_end - timedelta(days=period_days - 1)
@@ -519,8 +525,8 @@ end_iso = datetime.combine(end_date + timedelta(days=1), datetime.min.time()).is
 prev_start_iso = datetime.combine(prev_start, datetime.min.time()).isoformat()
 prev_end_iso = datetime.combine(prev_end + timedelta(days=1), datetime.min.time()).isoformat()
 
-df = load_actions(user_id, start_iso, end_iso)
-df_prev = load_actions(user_id, prev_start_iso, prev_end_iso)
+df = load_transactions(user_id, start_iso, end_iso)
+df_prev = load_transactions(user_id, prev_start_iso, prev_end_iso)
 
 type_options = [d("type_all", lang), d("type_expense", lang), d("type_income", lang)]
 type_keys = ["all", "expense", "income"]
@@ -548,7 +554,8 @@ if not df.empty:
 
 st.sidebar.markdown("---")
 st.sidebar.markdown(
-    f"**{d('sidebar_period_label', lang)}:** {start_date.strftime('%d/%m/%Y')} — {end_date.strftime('%d/%m/%Y')}"
+    f"**{d('sidebar_period_label', lang)}:** "
+    f"{start_date.strftime('%d/%m/%Y')} — {end_date.strftime('%d/%m/%Y')}"
 )
 if not df.empty:
     st.sidebar.markdown(f"**{d('sidebar_records', lang)}:** {len(df)}")
@@ -573,14 +580,24 @@ if df.empty:
 # KPI cards
 # ---------------------------------------------------------------------------
 
-total_expense = df.loc[df["type"] == "expense", "value"].sum() if "type" in df.columns else df["value"].sum()
-total_income = df.loc[df["type"] == "income", "value"].sum() if "type" in df.columns else 0.0
+total_expense = (
+    df.loc[df["type"] == "expense", "amount_original"].sum()
+    if "type" in df.columns else df["amount_original"].sum()
+)
+total_income = (
+    df.loc[df["type"] == "income", "amount_original"].sum()
+    if "type" in df.columns else 0.0
+)
 balance = total_income - total_expense
 tx_count = len(df)
 
 _has_prev = not df_prev.empty and "type" in df_prev.columns
-prev_expense = df_prev.loc[df_prev["type"] == "expense", "value"].sum() if _has_prev else 0.0
-prev_income = df_prev.loc[df_prev["type"] == "income", "value"].sum() if _has_prev else 0.0
+prev_expense = (
+    df_prev.loc[df_prev["type"] == "expense", "amount_original"].sum() if _has_prev else 0.0
+)
+prev_income = (
+    df_prev.loc[df_prev["type"] == "income", "amount_original"].sum() if _has_prev else 0.0
+)
 prev_balance = prev_income - prev_expense
 prev_tx = len(df_prev) if not df_prev.empty else 0
 
@@ -635,7 +652,7 @@ with r1c1:
     type_map = {"expense": d("type_expense", lang), "income": d("type_income", lang)}
     df_timeline = df.copy()
     df_timeline["type_label"] = df_timeline["type"].map(type_map).fillna(d("type_expense", lang))
-    daily = df_timeline.groupby(["date", "type_label"])["value"].sum().reset_index()
+    daily = df_timeline.groupby(["date", "type_label"])["amount_original"].sum().reset_index()
     daily.columns = [col_date, type_label, col_value]
 
     color_map = {d("type_expense", lang): "#EF5350", d("type_income", lang): "#4CAF50"}
@@ -657,7 +674,7 @@ with r1c1:
 
 with r1c2:
     st.subheader(d("chart_donut", lang))
-    cat_totals = df.groupby("cat_display")["value"].sum().reset_index()
+    cat_totals = df.groupby("cat_display")["amount_original"].sum().reset_index()
     cat_totals.columns = [col_category, "Total"]
     cat_totals = cat_totals.sort_values("Total", ascending=False)
 
@@ -714,7 +731,8 @@ with r2c2:
     st.subheader(d("chart_cumulative", lang))
     cumulative = df.sort_values("created_at").copy()
     cumulative["signed"] = cumulative.apply(
-        lambda r: r["value"] if r["type"] == "income" else -r["value"], axis=1,
+        lambda r: r["amount_original"] if r["type"] == "income" else -r["amount_original"],
+        axis=1,
     )
     cumulative["cumsum"] = cumulative["signed"].cumsum()
 
@@ -741,7 +759,9 @@ with r2c2:
 
 st.markdown("---")
 st.subheader(d("comparison_title", lang))
-st.caption(d("prev_period", lang, start=prev_start.strftime("%d/%m/%Y"), end=prev_end.strftime("%d/%m/%Y")))
+st.caption(
+    d("prev_period", lang, start=prev_start.strftime("%d/%m/%Y"), end=prev_end.strftime("%d/%m/%Y"))
+)
 
 if not df_prev.empty:
     cur_label = d("current_period_label", lang)
@@ -816,17 +836,19 @@ else:
     st.info(d("chart_no_history", lang))
 
 # ---------------------------------------------------------------------------
-# Top expenses
+# Top transactions
 # ---------------------------------------------------------------------------
 
 st.markdown("---")
 st.subheader(d("top_expenses", lang))
 
 top_n = min(10, len(df))
-top_expenses = df.nlargest(top_n, "value")[["id", "created_at", "type", "action", "value", "cat_display"]].copy()
+top_expenses = df.nlargest(top_n, "amount_original")[
+    ["id", "created_at", "type", "description", "amount_original", "cat_display"]
+].copy()
 type_display_map = {"expense": d("type_expense", lang), "income": d("type_income", lang)}
 top_expenses["type"] = top_expenses["type"].map(type_display_map).fillna(d("type_expense", lang))
-top_expenses["value"] = top_expenses["value"].apply(lambda v: _fmt(v))
+top_expenses["amount_original"] = top_expenses["amount_original"].apply(lambda v: _fmt(v))
 top_expenses["created_at"] = top_expenses["created_at"].dt.strftime("%d/%m/%Y %H:%M")
 top_expenses.columns = [
     d("col_id", lang), d("col_datetime", lang), d("col_type", lang),
@@ -845,11 +867,11 @@ search = st.text_input(d("search", lang), "")
 
 display = df.copy()
 if search:
-    display = display[display["action"].str.contains(search, case=False, na=False)]
+    display = display[display["description"].str.contains(search, case=False, na=False)]
 
-display = display[["id", "created_at", "type", "action", "value", "cat_display"]].copy()
+display = display[["id", "created_at", "type", "description", "amount_original", "cat_display"]].copy()
 display["type"] = display["type"].map(type_display_map).fillna(d("type_expense", lang))
-display["value"] = display["value"].apply(lambda v: _fmt(v))
+display["amount_original"] = display["amount_original"].apply(lambda v: _fmt(v))
 display["created_at"] = display["created_at"].dt.strftime("%d/%m/%Y %H:%M")
 display.columns = [
     d("col_id", lang), d("col_datetime", lang), d("col_type", lang),

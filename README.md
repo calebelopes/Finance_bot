@@ -113,12 +113,19 @@ Arquivo: `data/data.db` (criado automaticamente)
 
 ### Tabelas
 
-- **`users`** — id (Telegram), username
-- **`actions`** — user_id, action, value, category, created_at (UTC)
+- **`users`** — id (Telegram), username, password_hash, lang, session_token, is_admin
+- **`transactions`** — user_id, description, amount_original, currency_code, category, category_id, type, source, status, created_at (UTC)
+- **`categories`** — name_key, icon, type (expense/income), is_system
+- **`category_aliases`** — category_id, alias, lang
+- **`currencies`** — code (BRL/USD/EUR/JPY/GBP), name, symbol
+- **`user_preferences`** — user_id, currency_default, timezone, confirmation_mode
+- **`recurring_transactions`** — user_id, description, amount, currency_code, category_id, frequency, day_of_month
+- **`recurring_logs`** — recurring_id, transaction_id, executed_at
+- **`exchange_rates`** — from_currency, to_currency, rate, fetched_at
 - **`usage_events`** — user_id, event_type, created_at
 - **`app_events`** — event_type, created_at
 
-Migrações são aplicadas automaticamente em `setup_database()`.
+Migrations are applied automatically in `setup_database()`. Existing `actions` tables are renamed to `transactions` with column renames handled transparently.
 
 ---
 

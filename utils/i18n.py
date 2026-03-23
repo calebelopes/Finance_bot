@@ -204,8 +204,8 @@ BOT: dict[str, dict[str, str]] = {
             "Gasto: <descrição> <valor> (ex: jantar 20,50)\n"
             "Ganho: +<descrição> <valor> (ex: +salario 5000)"
         ),
-        "stored_expense": "🔴 #{id} Gasto: {action} — {value} [{category}]",
-        "stored_income": "🟢 #{id} Ganho: {action} — {value} [{category}]",
+        "stored_expense": "🔴 #{id} Gasto: {description} — {value} [{category}]",
+        "stored_income": "🟢 #{id} Ganho: {description} — {value} [{category}]",
         "deleted": "🗑️ Gasto #{id} apagado.",
         "delete_not_found": "Gasto #{id} não encontrado (ou não pertence a você).",
         "delete_usage": "Use: /delete <id>\nExemplo: /delete 5",
@@ -290,8 +290,8 @@ BOT: dict[str, dict[str, str]] = {
             "Expense: <description> <amount> (e.g. dinner 20.50)\n"
             "Income: +<description> <amount> (e.g. +salary 5000)"
         ),
-        "stored_expense": "🔴 #{id} Expense: {action} — {value} [{category}]",
-        "stored_income": "🟢 #{id} Income: {action} — {value} [{category}]",
+        "stored_expense": "🔴 #{id} Expense: {description} — {value} [{category}]",
+        "stored_income": "🟢 #{id} Income: {description} — {value} [{category}]",
         "deleted": "🗑️ Record #{id} deleted.",
         "delete_not_found": "Record #{id} not found (or doesn't belong to you).",
         "delete_usage": "Use: /delete <id>\nExample: /delete 5",
@@ -376,8 +376,8 @@ BOT: dict[str, dict[str, str]] = {
             "支出: <説明> <金額>（例: 夕食 2050）\n"
             "収入: +<説明> <金額>（例: +給料 300000）"
         ),
-        "stored_expense": "🔴 #{id} 支出: {action} — {value} [{category}]",
-        "stored_income": "🟢 #{id} 収入: {action} — {value} [{category}]",
+        "stored_expense": "🔴 #{id} 支出: {description} — {value} [{category}]",
+        "stored_income": "🟢 #{id} 収入: {description} — {value} [{category}]",
         "deleted": "🗑️ 記録 #{id} を削除しました。",
         "delete_not_found": "記録 #{id} が見つかりません（またはあなたのものではありません）。",
         "delete_usage": "使い方: /delete <id>\n例: /delete 5",

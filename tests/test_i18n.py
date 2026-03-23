@@ -39,12 +39,12 @@ class TestBotTranslation:
         assert "ようこそ" in t("start", "ja")
 
     def test_placeholder_expense(self):
-        result = t("stored_expense", "en", id=1, action="dinner", value="$20.00", category="Food")
+        result = t("stored_expense", "en", id=1, description="dinner", value="$20.00", category="Food")
         assert "#1" in result
         assert "dinner" in result
 
     def test_placeholder_income(self):
-        result = t("stored_income", "en", id=1, action="salary", value="$5,000.00", category="Salary")
+        result = t("stored_income", "en", id=1, description="salary", value="$5,000.00", category="Salary")
         assert "#1" in result
         assert "salary" in result
 
