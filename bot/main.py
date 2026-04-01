@@ -28,6 +28,7 @@ from telegram.ext import (  # noqa: E402
 from telegram.request import HTTPXRequest  # noqa: E402
 
 from utils import categories, db  # noqa: E402
+from utils.export import generate_csv, generate_pdf  # noqa: E402
 from utils.i18n import (  # noqa: E402
     ALL_GREETINGS,
     CURRENCY_LABELS,
@@ -139,13 +140,17 @@ def _format_transactions(transactions: list[dict], title: str, lang: str, user_i
             total_income += tx["amount_original"]
         else:
             total_expense += tx["amount_original"]
-        value_str = fmt_currency(tx["amount_original"], lang)
+        cur = tx.get("currency_code", "BRL")
+        value_str = fmt_currency(tx["amount_original"], lang, currency_code=cur)
         time_str = _utc_to_local_str(tx["created_at"], user_id)
         cat_display = cat_name(tx["category"], lang)
         sign = "+" if is_income else "-"
-        lines.append(
-            f"  {icon} #{tx['id']}  [{time_str}]  {tx['description']}: {sign}{value_str}  [{cat_display}]"
-        )
+        line = f"  {icon} #{tx['id']}  [{time_str}]  {tx['description']}: {sign}{value_str}  [{cat_display}]"
+        if tx.get("amount_converted") and tx.get("exchange_rate"):
+            user_cur = db.get_user_preferences(user_id).get("currency_default", "BRL") if user_id else "BRL"
+            converted_str = fmt_currency(tx["amount_converted"], lang, currency_code=user_cur)
+            line += f"  ≈ {converted_str}"
+        lines.append(line)
 
     lines.append("")
     if total_income > 0 and total_expense > 0:
@@ -465,6 +470,172 @@ async def cb_settimezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.edit_message_text(t("settimezone_done", lang, timezone=chosen))
 
 
+async def cmd_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not _is_authorized(user.id):
+        await update.message.reply_text(t("unauthorized", "pt"))
+        return
+    lang = _get_lang(update)
+    try:
+        rules = db.get_recurring(user.id)
+        if not rules:
+            await update.message.reply_text(t("recurring_empty", lang))
+            return
+        lines = [t("recurring_title", lang), ""]
+        for r in rules:
+            icon = "🟢" if r["type"] == "income" else "🔴"
+            status = t("recurring_active", lang) if r["active"] else t("recurring_paused", lang)
+            cat_display = cat_name(r["category"] or "Outros", lang)
+            amount_str = fmt_currency(r["amount"], lang, currency_code=r.get("currency_code"))
+            lines.append(t("recurring_item", lang,
+                           id=r["id"], icon=icon, description=r["description"],
+                           amount=amount_str, category=cat_display,
+                           day=r["day_of_month"], status=status))
+        await update.message.reply_text("\n".join(lines))
+    except Exception:
+        log.exception("Error in /recurring")
+        await update.message.reply_text(t("error", lang))
+
+
+async def cmd_addrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not _is_authorized(user.id):
+        await update.message.reply_text(t("unauthorized", "pt"))
+        return
+    lang = _get_lang(update)
+    try:
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text(t("addrecurring_usage", lang))
+            return
+        raw_desc = context.args[0]
+        is_income = raw_desc.startswith("+")
+        desc = raw_desc.lstrip("+") if is_income else raw_desc
+        action_type = "income" if is_income else "expense"
+
+        try:
+            amount = parse_number_ptbr(context.args[1])
+        except ValueError:
+            await update.message.reply_text(t("addrecurring_usage", lang))
+            return
+
+        day = None
+        if len(context.args) >= 3:
+            try:
+                day = int(context.args[2])
+                day = max(1, min(28, day))
+            except ValueError:
+                pass
+
+        prefs = db.get_user_preferences(user.id)
+        currency = prefs.get("currency_default", "BRL")
+        category = categories.infer_category(desc, action_type)
+        rec_id = db.add_recurring(
+            user.id, desc, amount, category, action_type,
+            currency_code=currency, day_of_month=day,
+        )
+        amount_str = fmt_currency(amount, lang, currency_code=currency)
+        rule = db.get_recurring(user.id)
+        actual_day = next((r["day_of_month"] for r in rule if r["id"] == rec_id), day)
+        await update.message.reply_text(
+            t("addrecurring_done", lang, id=rec_id, description=desc, amount=amount_str, day=actual_day)
+        )
+    except Exception:
+        log.exception("Error in /addrecurring")
+        await update.message.reply_text(t("error", lang))
+
+
+async def cmd_delrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not _is_authorized(user.id):
+        await update.message.reply_text(t("unauthorized", "pt"))
+        return
+    lang = _get_lang(update)
+    try:
+        if not context.args or len(context.args) != 1:
+            await update.message.reply_text(t("delrecurring_usage", lang))
+            return
+        try:
+            rec_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text(t("delrecurring_usage", lang))
+            return
+        if db.delete_recurring(user.id, rec_id):
+            await update.message.reply_text(t("delrecurring_done", lang, id=rec_id))
+        else:
+            await update.message.reply_text(t("delrecurring_not_found", lang, id=rec_id))
+    except Exception:
+        log.exception("Error in /delrecurring")
+        await update.message.reply_text(t("error", lang))
+
+
+async def cmd_togglerecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not _is_authorized(user.id):
+        await update.message.reply_text(t("unauthorized", "pt"))
+        return
+    lang = _get_lang(update)
+    try:
+        if not context.args or len(context.args) != 1:
+            await update.message.reply_text(t("togglerecurring_usage", lang))
+            return
+        try:
+            rec_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text(t("togglerecurring_usage", lang))
+            return
+        result = db.toggle_recurring(user.id, rec_id)
+        if result is None:
+            await update.message.reply_text(t("delrecurring_not_found", lang, id=rec_id))
+        else:
+            status = t("recurring_active", lang) if result else t("recurring_paused", lang)
+            await update.message.reply_text(t("togglerecurring_done", lang, id=rec_id, status=status))
+    except Exception:
+        log.exception("Error in /togglerecurring")
+        await update.message.reply_text(t("error", lang))
+
+
+async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not _is_authorized(user.id):
+        await update.message.reply_text(t("unauthorized", "pt"))
+        return
+    lang = _get_lang(update)
+    try:
+        period = "month"
+        if context.args:
+            p = context.args[0].lower()
+            if p in ("today", "hoje", "kyou"):
+                period = "today"
+            elif p in ("week", "semana", "shuu"):
+                period = "week"
+            elif p in ("month", "mes", "tsuki"):
+                period = "month"
+
+        start_utc, end_utc = _period_range_utc(period, user.id)
+        txs = db.get_transactions(user.id, start_utc, end_utc)
+        if not txs:
+            await update.message.reply_text(t("export_empty", lang))
+            return
+
+        csv_bytes = generate_csv(txs, lang)
+        pdf_bytes = generate_pdf(txs, lang, period)
+
+        period_label = {"today": "today", "week": "week", "month": "month"}[period]
+        await update.message.reply_document(
+            document=csv_bytes,
+            filename=f"finance_{period_label}.csv",
+            caption=t("export_csv_caption", lang, period=period_label),
+        )
+        await update.message.reply_document(
+            document=pdf_bytes,
+            filename=f"finance_{period_label}.pdf",
+            caption=t("export_pdf_caption", lang, period=period_label),
+        )
+    except Exception:
+        log.exception("Error in /export")
+        await update.message.reply_text(t("error", lang))
+
+
 async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not _is_authorized(user.id):
@@ -524,7 +695,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     action_type = "income" if is_income else "expense"
 
     try:
-        description, value = parse_action_value(parse_text)
+        description, value, parsed_currency = parse_action_value(parse_text)
     except ValueError:
         await update.message.reply_text(t("invalid", lang))
         return
@@ -533,19 +704,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         category = categories.infer_category(description, action_type)
         prefs = db.get_user_preferences(user.id)
         user_currency = prefs.get("currency_default", "BRL")
+        tx_currency = parsed_currency or user_currency
+
+        amount_converted = None
+        exchange_rate = None
+        if tx_currency != user_currency:
+            amount_converted, exchange_rate = db.convert_amount(value, tx_currency, user_currency)
+
         tx_id = db.store_transaction(
             user.id, user.username, description, value, category, action_type,
-            currency_code=user_currency,
+            currency_code=tx_currency,
+            amount_converted=amount_converted,
+            exchange_rate=exchange_rate,
         )
-        value_str = fmt_currency(value, lang)
+        value_str = fmt_currency(value, lang, currency_code=tx_currency)
         cat_display = cat_name(category, lang)
         msg_key = "stored_income" if is_income else "stored_expense"
-        await update.message.reply_text(
-            t(msg_key, lang, id=tx_id, description=description, value=value_str, category=cat_display)
-        )
+        reply = t(msg_key, lang, id=tx_id, description=description, value=value_str, category=cat_display)
+        if amount_converted and exchange_rate:
+            converted_str = fmt_currency(amount_converted, lang, currency_code=user_currency)
+            reply += f"\n  ≈ {converted_str} (1 {tx_currency} = {exchange_rate:.4f} {user_currency})"
+        await update.message.reply_text(reply)
         log.info(
-            "Stored #%d [%s] for %s (%d): %s = %.2f [%s]",
-            tx_id, action_type, user.username, user.id, description, value, category,
+            "Stored #%d [%s] for %s (%d): %s = %.2f %s [%s]",
+            tx_id, action_type, user.username, user.id, description, value, tx_currency, category,
         )
     except Exception:
         log.exception("Error storing transaction for user %d", user.id)
@@ -557,9 +739,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ---------------------------------------------------------------------------
 
 
-async def _post_init(_: Application) -> None:
+async def _process_due_recurring(application: Application) -> None:
+    """Execute all overdue recurring transactions and notify users."""
+    due = db.get_due_recurring()
+    for rule in due:
+        try:
+            cat = rule.get("category") or "Outros"
+            tx_id = db.store_transaction(
+                rule["user_id"], None, rule["description"], rule["amount"],
+                cat, rule["type"],
+                currency_code=rule.get("currency_code", "BRL"),
+                source="recurring",
+                recurring_id=rule["id"],
+            )
+            db.log_recurring_execution(rule["id"], tx_id)
+            db.advance_recurring(rule["id"])
+            lang = db.get_user_lang(rule["user_id"])
+            amount_str = fmt_currency(rule["amount"], lang, currency_code=rule.get("currency_code"))
+            try:
+                await application.bot.send_message(
+                    rule["user_id"],
+                    t("recurring_executed", lang, tx_id=tx_id,
+                      description=rule["description"], amount=amount_str),
+                )
+            except Exception:
+                log.warning("Could not notify user %d about recurring #%d", rule["user_id"], rule["id"])
+            log.info("Executed recurring #%d → tx #%d for user %d", rule["id"], tx_id, rule["user_id"])
+        except Exception:
+            log.exception("Error executing recurring rule #%d", rule["id"])
+
+
+async def _recurring_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Periodic job that runs once per day to process due recurring transactions."""
+    await _process_due_recurring(context.application)
+
+
+async def _post_init(application: Application) -> None:
     db.log_app_event("app_started")
     log.info("Bot started successfully")
+    await _process_due_recurring(application)
 
 
 def main() -> None:
@@ -611,7 +829,16 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(cb_setcurrency, pattern=r"^currency:"))
     application.add_handler(CommandHandler(["settimezone", "fuso", "jikan"], cmd_settimezone))
     application.add_handler(CallbackQueryHandler(cb_settimezone, pattern=r"^tz:"))
+    application.add_handler(CommandHandler(["recurring", "recorrente", "teiki"], cmd_recurring))
+    application.add_handler(CommandHandler(["addrecurring", "novarecorrente", "teikitsuika"], cmd_addrecurring))
+    application.add_handler(CommandHandler(["delrecurring", "excluirrecorrente", "teikisakujo"], cmd_delrecurring))
+    application.add_handler(CommandHandler(["togglerecurring", "alternarrecorrente", "teikikiri"], cmd_togglerecurring))
+    application.add_handler(CommandHandler(["export", "exportar", "shukuryoku"], cmd_export))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    job_queue = application.job_queue
+    if job_queue:
+        job_queue.run_repeating(_recurring_job, interval=86400, first=60)
 
     application.run_polling()
 

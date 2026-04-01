@@ -326,3 +326,103 @@ class TestCurrencies:
         )
         txs = db.get_transactions(900, *_WIDE_RANGE)
         assert txs[0]["currency_code"] == "USD"
+
+
+class TestExchangeRates:
+    def test_same_currency_rate(self):
+        assert db.get_exchange_rate("USD", "USD") == 1.0
+        assert db.get_exchange_rate("BRL", "BRL") == 1.0
+
+    def test_fallback_rate(self):
+        rate = db.get_exchange_rate("USD", "BRL")
+        assert rate is not None
+        assert rate > 0
+
+    def test_store_and_retrieve(self):
+        db.store_exchange_rate("USD", "BRL", 5.25)
+        rate = db.get_exchange_rate("USD", "BRL")
+        assert rate == 5.25
+
+    def test_convert_amount(self):
+        db.store_exchange_rate("USD", "BRL", 5.0)
+        converted, rate = db.convert_amount(100.0, "USD", "BRL")
+        assert converted == 500.0
+        assert rate == 5.0
+
+    def test_convert_same_currency(self):
+        converted, rate = db.convert_amount(100.0, "BRL", "BRL")
+        assert converted == 100.0
+        assert rate == 1.0
+
+    def test_store_transaction_with_conversion(self):
+        db.store_transaction(
+            950, "convtest", "dinner", 30.0, "Refeição",
+            currency_code="USD", amount_converted=150.0, exchange_rate=5.0,
+        )
+        txs = db.get_transactions(950, *_WIDE_RANGE)
+        assert txs[0]["currency_code"] == "USD"
+
+
+class TestRecurringTransactions:
+    def test_add_and_list(self):
+        db.ensure_user_with_lang(700, "recuser")
+        rec_id = db.add_recurring(700, "aluguel", 1500.0, "Moradia", day_of_month=5)
+        assert rec_id is not None
+        rules = db.get_recurring(700)
+        assert len(rules) == 1
+        assert rules[0]["description"] == "aluguel"
+        assert rules[0]["amount"] == 1500.0
+        assert rules[0]["day_of_month"] == 5
+        assert rules[0]["active"] == 1
+
+    def test_delete(self):
+        db.ensure_user_with_lang(701, "recuser2")
+        rec_id = db.add_recurring(701, "netflix", 30.0, "Lazer")
+        assert db.delete_recurring(701, rec_id) is True
+        assert db.get_recurring(701) == []
+
+    def test_delete_not_found(self):
+        assert db.delete_recurring(701, 99999) is False
+
+    def test_delete_wrong_user(self):
+        db.ensure_user_with_lang(702, "recuser3")
+        rec_id = db.add_recurring(702, "rent", 1500.0, "Moradia")
+        assert db.delete_recurring(999, rec_id) is False
+
+    def test_toggle(self):
+        db.ensure_user_with_lang(703, "recuser4")
+        rec_id = db.add_recurring(703, "gym", 100.0, "Lazer")
+        result = db.toggle_recurring(703, rec_id)
+        assert result is False
+        result = db.toggle_recurring(703, rec_id)
+        assert result is True
+
+    def test_toggle_not_found(self):
+        assert db.toggle_recurring(703, 99999) is None
+
+    def test_get_due_and_advance(self):
+        db.ensure_user_with_lang(704, "recuser5")
+        rec_id = db.add_recurring(704, "salary", 5000.0, "Salário", "income", day_of_month=1)
+        with db._connect() as conn:
+            conn.execute(
+                "UPDATE recurring_transactions SET next_run = '2020-01-01' WHERE id = ?",
+                (rec_id,),
+            )
+            conn.commit()
+        due = db.get_due_recurring()
+        assert any(r["id"] == rec_id for r in due)
+        db.advance_recurring(rec_id)
+        rules = db.get_recurring(704)
+        assert rules[0]["next_run"] > "2020-01-01"
+
+    def test_log_execution(self):
+        db.ensure_user_with_lang(705, "recuser6")
+        rec_id = db.add_recurring(705, "test", 10.0, "Outros")
+        tx_id = db.store_transaction(705, "recuser6", "test", 10.0, "Outros")
+        db.log_recurring_execution(rec_id, tx_id)
+        with db._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM recurring_logs WHERE recurring_id = ?", (rec_id,)
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["transaction_id"] == tx_id

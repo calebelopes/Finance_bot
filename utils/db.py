@@ -353,6 +353,9 @@ def store_transaction(
     currency_code: str = "BRL",
     source: str = "text",
     category_id: int | None = None,
+    amount_converted: float | None = None,
+    exchange_rate: float | None = None,
+    recurring_id: int | None = None,
 ) -> int:
     """Atomically: upsert user, insert transaction, log usage event. Returns the new row id."""
     with _connect() as conn:
@@ -368,11 +371,15 @@ def store_transaction(
 
         cur = conn.execute(
             """INSERT INTO transactions
-               (user_id, description, amount_original, currency_code, category, category_id,
-                type, source, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)""",
-            (user_id, description, amount, currency_code, category, category_id,
-             action_type, source, created_at),
+               (user_id, description, amount_original, currency_code,
+                amount_converted, exchange_rate,
+                category, category_id, type, source, status,
+                recurring_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)""",
+            (user_id, description, amount, currency_code,
+             amount_converted, exchange_rate,
+             category, category_id, action_type, source,
+             recurring_id, created_at),
         )
         tx_id = cur.lastrowid
         conn.execute(
@@ -507,6 +514,58 @@ def is_valid_currency(code: str) -> bool:
     with _connect() as conn:
         row = conn.execute("SELECT 1 FROM currencies WHERE code = ?", (code.upper(),)).fetchone()
     return row is not None
+
+
+# ---------------------------------------------------------------------------
+# Exchange rates
+# ---------------------------------------------------------------------------
+
+_FALLBACK_RATES_TO_USD: dict[str, float] = {
+    "USD": 1.0,
+    "BRL": 0.20,
+    "EUR": 1.08,
+    "GBP": 1.27,
+    "JPY": 0.0067,
+}
+
+
+def store_exchange_rate(from_c: str, to_c: str, rate: float) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO exchange_rates (from_currency, to_currency, rate, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            (from_c.upper(), to_c.upper(), rate, _utc_now()),
+        )
+        conn.commit()
+
+
+def get_exchange_rate(from_c: str, to_c: str) -> float | None:
+    """Return the latest stored rate, or compute from fallback table."""
+    from_c, to_c = from_c.upper(), to_c.upper()
+    if from_c == to_c:
+        return 1.0
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT rate FROM exchange_rates "
+            "WHERE from_currency = ? AND to_currency = ? "
+            "ORDER BY fetched_at DESC LIMIT 1",
+            (from_c, to_c),
+        ).fetchone()
+    if row:
+        return row["rate"]
+    from_usd = _FALLBACK_RATES_TO_USD.get(from_c)
+    to_usd = _FALLBACK_RATES_TO_USD.get(to_c)
+    if from_usd and to_usd:
+        return from_usd / to_usd
+    return None
+
+
+def convert_amount(amount: float, from_c: str, to_c: str) -> tuple[float | None, float | None]:
+    """Return (converted_amount, rate) or (None, None) if no rate available."""
+    rate = get_exchange_rate(from_c, to_c)
+    if rate is None:
+        return None, None
+    return round(amount * rate, 2), rate
 
 
 # ---------------------------------------------------------------------------
@@ -660,6 +719,144 @@ def is_admin(user_id: int) -> bool:
     with _connect() as conn:
         row = conn.execute("SELECT is_admin FROM users WHERE id = ?", (user_id,)).fetchone()
     return bool(row and row["is_admin"])
+
+
+# ---------------------------------------------------------------------------
+# Recurring transactions
+# ---------------------------------------------------------------------------
+
+def add_recurring(
+    user_id: int,
+    description: str,
+    amount: float,
+    category: str,
+    action_type: str = "expense",
+    currency_code: str = "BRL",
+    frequency: str = "monthly",
+    day_of_month: int | None = None,
+) -> int:
+    """Create a new recurring transaction rule. Returns the new rule id."""
+    now = _utc_now()
+    cat_id = get_category_id(category)
+    if day_of_month is None:
+        day_of_month = datetime.datetime.now(datetime.UTC).day
+    # Calculate next_run as the next occurrence
+    today = datetime.datetime.now(datetime.UTC).date()
+    if day_of_month <= today.day:
+        m = today.month + 1
+        y = today.year
+        if m > 12:
+            m = 1
+            y += 1
+        next_run = datetime.date(y, m, day_of_month).isoformat()
+    else:
+        next_run = datetime.date(today.year, today.month, min(day_of_month, 28)).isoformat()
+
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO recurring_transactions
+               (user_id, description, amount, currency_code, category_id, type,
+                frequency, day_of_month, next_run, active, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+            (user_id, description, amount, currency_code, cat_id,
+             action_type, frequency, day_of_month, next_run, now),
+        )
+        rec_id = cur.lastrowid
+        conn.commit()
+    return rec_id
+
+
+def get_recurring(user_id: int) -> list[dict]:
+    """Return all recurring rules for a user."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT r.id, r.description, r.amount, r.currency_code, r.type,
+                      r.frequency, r.day_of_month, r.next_run, r.active,
+                      c.name_key AS category
+               FROM recurring_transactions r
+               LEFT JOIN categories c ON c.id = r.category_id
+               WHERE r.user_id = ?
+               ORDER BY r.id""",
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_recurring(user_id: int, rec_id: int) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM recurring_transactions WHERE id = ? AND user_id = ?",
+            (rec_id, user_id),
+        )
+        conn.commit()
+    return cur.rowcount > 0
+
+
+def toggle_recurring(user_id: int, rec_id: int) -> bool | None:
+    """Toggle active status. Returns new active state, or None if not found."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT active FROM recurring_transactions WHERE id = ? AND user_id = ?",
+            (rec_id, user_id),
+        ).fetchone()
+        if not row:
+            return None
+        new_active = 0 if row["active"] else 1
+        conn.execute(
+            "UPDATE recurring_transactions SET active = ? WHERE id = ?",
+            (new_active, rec_id),
+        )
+        conn.commit()
+    return bool(new_active)
+
+
+def get_due_recurring() -> list[dict]:
+    """Return all active recurring rules whose next_run <= today."""
+    today = datetime.datetime.now(datetime.UTC).date().isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT r.id, r.user_id, r.description, r.amount, r.currency_code,
+                      r.type, r.frequency, r.day_of_month, r.next_run,
+                      c.name_key AS category
+               FROM recurring_transactions r
+               LEFT JOIN categories c ON c.id = r.category_id
+               WHERE r.active = 1 AND r.next_run <= ?""",
+            (today,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def advance_recurring(rec_id: int) -> None:
+    """Advance next_run to the next month and log execution."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT next_run, day_of_month FROM recurring_transactions WHERE id = ?",
+            (rec_id,),
+        ).fetchone()
+        if not row:
+            return
+        cur_next = datetime.date.fromisoformat(row["next_run"])
+        m = cur_next.month + 1
+        y = cur_next.year
+        if m > 12:
+            m = 1
+            y += 1
+        new_next = datetime.date(y, m, min(row["day_of_month"], 28)).isoformat()
+        conn.execute(
+            "UPDATE recurring_transactions SET next_run = ? WHERE id = ?",
+            (new_next, rec_id),
+        )
+        conn.commit()
+
+
+def log_recurring_execution(recurring_id: int, transaction_id: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO recurring_logs (recurring_id, transaction_id, executed_at) "
+            "VALUES (?, ?, ?)",
+            (recurring_id, transaction_id, _utc_now()),
+        )
+        conn.commit()
 
 
 def get_all_users_stats() -> list[dict]:

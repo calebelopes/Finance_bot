@@ -17,6 +17,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from utils.db import setup_database  # noqa: E402
+from utils.export import generate_csv, generate_pdf  # noqa: E402
 from utils.i18n import (  # noqa: E402
     CURRENCY_LABELS,
     LANG_LABELS,
@@ -393,7 +394,9 @@ def load_transactions(_user_id: int, start_iso: str, end_iso: str) -> pd.DataFra
     df = pd.read_sql_query(
         """
         SELECT t.id, t.description, t.amount_original, t.category,
-               COALESCE(t.type, 'expense') AS type, t.created_at
+               COALESCE(t.type, 'expense') AS type,
+               COALESCE(t.currency_code, 'BRL') AS currency_code,
+               t.created_at
         FROM transactions t
         WHERE t.user_id = ? AND t.created_at >= ? AND t.created_at < ?
           AND COALESCE(t.status, 'confirmed') != 'deleted'
@@ -601,6 +604,16 @@ if selected_type != "all":
         df = df[df["type"] == selected_type]
     if not df_prev.empty:
         df_prev = df_prev[df_prev["type"] == selected_type]
+
+if not df.empty and "currency_code" in df.columns:
+    all_currencies = sorted(df["currency_code"].unique())
+    if len(all_currencies) > 1:
+        currency_opts = [d("currency_all", lang)] + all_currencies
+        selected_currency = st.sidebar.selectbox(d("sidebar_currency_filter", lang), currency_opts)
+        if selected_currency != d("currency_all", lang):
+            df = df[df["currency_code"] == selected_currency]
+            if not df_prev.empty and "currency_code" in df_prev.columns:
+                df_prev = df_prev[df_prev["currency_code"] == selected_currency]
 
 if not df.empty:
     df["cat_display"] = df["category"].apply(lambda c: cat_name(c, lang))
@@ -906,17 +919,22 @@ st.markdown("---")
 st.subheader(d("top_expenses", lang))
 
 top_n = min(10, len(df))
-top_expenses = df.nlargest(top_n, "amount_original")[
-    ["id", "created_at", "type", "description", "amount_original", "cat_display"]
-].copy()
+_top_cols = ["id", "created_at", "type", "description", "amount_original", "cat_display"]
+if "currency_code" in df.columns:
+    _top_cols.insert(5, "currency_code")
+top_expenses = df.nlargest(top_n, "amount_original")[_top_cols].copy()
 type_display_map = {"expense": d("type_expense", lang), "income": d("type_income", lang)}
 top_expenses["type"] = top_expenses["type"].map(type_display_map).fillna(d("type_expense", lang))
 top_expenses["amount_original"] = top_expenses["amount_original"].apply(lambda v: _fmt(v))
 top_expenses["created_at"] = top_expenses["created_at"].dt.strftime("%d/%m/%Y %H:%M")
-top_expenses.columns = [
+_col_names = [
     d("col_id", lang), d("col_datetime", lang), d("col_type", lang),
-    d("col_desc", lang), d("col_value", lang), d("col_category", lang),
+    d("col_desc", lang), d("col_value", lang),
 ]
+if "currency_code" in top_expenses.columns:
+    _col_names.append(d("col_currency", lang))
+_col_names.append(d("col_category", lang))
+top_expenses.columns = _col_names
 st.dataframe(top_expenses, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
@@ -932,18 +950,101 @@ display = df.copy()
 if search:
     display = display[display["description"].str.contains(search, case=False, na=False)]
 
-display = display[["id", "created_at", "type", "description", "amount_original", "cat_display"]].copy()
+_display_cols = ["id", "created_at", "type", "description", "amount_original"]
+if "currency_code" in display.columns:
+    _display_cols.append("currency_code")
+_display_cols.append("cat_display")
+display = display[_display_cols].copy()
 display["type"] = display["type"].map(type_display_map).fillna(d("type_expense", lang))
 display["amount_original"] = display["amount_original"].apply(lambda v: _fmt(v))
 display["created_at"] = display["created_at"].dt.strftime("%d/%m/%Y %H:%M")
-display.columns = [
+_disp_col_names = [
     d("col_id", lang), d("col_datetime", lang), d("col_type", lang),
-    d("col_desc", lang), d("col_value", lang), d("col_category", lang),
+    d("col_desc", lang), d("col_value", lang),
 ]
+if "currency_code" in df.columns:
+    _disp_col_names.append(d("col_currency", lang))
+_disp_col_names.append(d("col_category", lang))
+display.columns = _disp_col_names
 
 st.dataframe(display, use_container_width=True, hide_index=True, height=400)
 
 st.caption(d("showing", lang, shown=len(display), total=len(df)))
+
+# ---------------------------------------------------------------------------
+# Export buttons
+# ---------------------------------------------------------------------------
+
+st.markdown("---")
+_export_txs = [dict(row) for _, row in df.iterrows()]
+for _etx in _export_txs:
+    for k, v in _etx.items():
+        if hasattr(v, "isoformat"):
+            _etx[k] = v.isoformat()
+
+_exp_c1, _exp_c2, _ = st.columns([1, 1, 4])
+with _exp_c1:
+    _csv_data = generate_csv(_export_txs, lang)
+    st.download_button(
+        d("export_csv", lang),
+        data=_csv_data,
+        file_name="finance_export.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+with _exp_c2:
+    _pdf_data = generate_pdf(_export_txs, lang, "custom")
+    st.download_button(
+        d("export_pdf", lang),
+        data=_pdf_data,
+        file_name="finance_export.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+    )
+
+# ---------------------------------------------------------------------------
+# Recurring transactions
+# ---------------------------------------------------------------------------
+
+st.markdown("---")
+st.subheader(d("recurring_title", lang))
+
+@st.cache_data(ttl=30)
+def _load_recurring(_user_id: int) -> pd.DataFrame:
+    conn = sqlite3.connect(DB_PATH)
+    rdf = pd.read_sql_query(
+        """SELECT r.id, r.description, r.amount, r.currency_code, r.type,
+                  r.day_of_month, r.next_run, r.active,
+                  c.name_key AS category
+           FROM recurring_transactions r
+           LEFT JOIN categories c ON c.id = r.category_id
+           WHERE r.user_id = ?
+           ORDER BY r.id""",
+        conn,
+        params=[_user_id],
+    )
+    conn.close()
+    return rdf
+
+_rec_df = _load_recurring(user_id)
+if not _rec_df.empty:
+    _rec_display = _rec_df.copy()
+    _rec_display["category"] = _rec_display["category"].apply(lambda c: cat_name(c or "Outros", lang))
+    _rec_display["amount"] = _rec_display.apply(
+        lambda r: fmt_currency(r["amount"], lang, currency_code=r.get("currency_code")), axis=1
+    )
+    _rec_display["active"] = _rec_display["active"].apply(
+        lambda a: d("recurring_active", lang) if a else d("recurring_paused", lang)
+    )
+    _rec_display = _rec_display[["id", "description", "amount", "currency_code", "category",
+                                  "day_of_month", "next_run", "active"]]
+    _rec_display.columns = [
+        "ID", d("recurring_col_desc", lang), d("recurring_col_amount", lang),
+        d("col_currency", lang), d("col_category", lang),
+        d("recurring_col_day", lang), d("recurring_col_next", lang),
+        d("recurring_col_status", lang),
+    ]
+    st.dataframe(_rec_display, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Footer

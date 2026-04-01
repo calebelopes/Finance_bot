@@ -76,6 +76,40 @@ class TestSettingsTranslations:
             assert d("settings_timezone", lang)
 
 
+class TestRecurringTranslations:
+    def test_recurring_strings_all_langs(self):
+        for lang in ("pt", "en", "ja"):
+            assert t("recurring_title", lang)
+            assert t("recurring_empty", lang)
+            assert t("addrecurring_usage", lang)
+            assert t("addrecurring_done", lang, id=1, description="x", amount="$10", day=5)
+            assert t("delrecurring_done", lang, id=1)
+            assert t("togglerecurring_done", lang, id=1, status="active")
+            assert t("recurring_executed", lang, tx_id=1, description="x", amount="$10")
+
+    def test_dashboard_recurring_strings(self):
+        for lang in ("pt", "en", "ja"):
+            assert d("recurring_title", lang)
+            assert d("recurring_col_desc", lang)
+            assert d("recurring_col_amount", lang)
+            assert d("recurring_active", lang)
+            assert d("recurring_paused", lang)
+
+
+class TestExportTranslations:
+    def test_export_strings_all_langs(self):
+        for lang in ("pt", "en", "ja"):
+            assert t("export_usage", lang)
+            assert t("export_empty", lang)
+            assert t("export_csv_caption", lang, period="month")
+            assert t("export_pdf_caption", lang, period="month")
+
+    def test_dashboard_export_strings(self):
+        for lang in ("pt", "en", "ja"):
+            assert d("export_csv", lang)
+            assert d("export_pdf", lang)
+
+
 class TestBotTranslation:
     def test_basic_lookup(self):
         assert "Bem-vindo" in t("start", "pt")

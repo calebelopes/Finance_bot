@@ -210,6 +210,14 @@ BOT: dict[str, dict[str, str]] = {
             "  /setpassword <senha> — definir senha do dashboard\n"
             "  {dashboard_url}\n"
             "\n"
+            "🔄 Recorrentes:\n"
+            "  /recurring — listar recorrentes\n"
+            "  /addrecurring — criar nova\n"
+            "  /delrecurring — excluir\n"
+            "\n"
+            "📤 Exportar:\n"
+            "  /export — exportar CSV + PDF\n"
+            "\n"
             "⚙️ Configurações:\n"
             "  /config — ver configurações atuais\n"
             "  /lang — idioma\n"
@@ -259,6 +267,28 @@ BOT: dict[str, dict[str, str]] = {
         "setcurrency_done": "💱 Moeda padrão alterada para {currency}.",
         "settimezone_prompt": "🕐 Escolha seu fuso horário:",
         "settimezone_done": "🕐 Fuso horário alterado para {timezone}.",
+        "currency_converted": "  ≈ {converted} ({rate})",
+        "recurring_title": "🔄 Suas transações recorrentes:",
+        "recurring_empty": "Nenhuma transação recorrente cadastrada.",
+        "recurring_item": "  #{id} {icon} {description} — {amount} [{category}] (dia {day}, {status})",
+        "recurring_active": "ativo",
+        "recurring_paused": "pausado",
+        "addrecurring_usage": (
+            "Use: /addrecurring <descrição> <valor> [dia]\n"
+            "Exemplo: /addrecurring aluguel 1500 5\n"
+            "Ganho: /addrecurring +salario 5000 1"
+        ),
+        "addrecurring_done": "🔄 Recorrente #{id} criada: {description} — {amount} (dia {day})",
+        "delrecurring_usage": "Use: /delrecurring <id>\nExemplo: /delrecurring 1",
+        "delrecurring_done": "🗑️ Recorrente #{id} removida.",
+        "delrecurring_not_found": "Recorrente #{id} não encontrada.",
+        "togglerecurring_usage": "Use: /togglerecurring <id>\nExemplo: /togglerecurring 1",
+        "togglerecurring_done": "🔄 Recorrente #{id} agora está {status}.",
+        "recurring_executed": "🔄 Transação automática #{tx_id}: {description} — {amount}",
+        "export_usage": "Use: /export [período]\nPeríodos: today, week, month (padrão: month)",
+        "export_empty": "Nenhum registro encontrado para exportar neste período.",
+        "export_csv_caption": "📊 Exportação CSV — {period}",
+        "export_pdf_caption": "📊 Exportação PDF — {period}",
         "today_title": "📋 Hoje ({date})",
         "week_title": "📋 Semana",
         "month_title": "📋 {month}/{year}",
@@ -309,6 +339,14 @@ BOT: dict[str, dict[str, str]] = {
             "  /setpassword <pass> — set dashboard password\n"
             "  {dashboard_url}\n"
             "\n"
+            "🔄 Recurring:\n"
+            "  /recurring — list recurring\n"
+            "  /addrecurring — create new\n"
+            "  /delrecurring — delete\n"
+            "\n"
+            "📤 Export:\n"
+            "  /export — export CSV + PDF\n"
+            "\n"
             "⚙️ Settings:\n"
             "  /config — view current settings\n"
             "  /lang — language\n"
@@ -358,6 +396,28 @@ BOT: dict[str, dict[str, str]] = {
         "setcurrency_done": "💱 Default currency changed to {currency}.",
         "settimezone_prompt": "🕐 Choose your timezone:",
         "settimezone_done": "🕐 Timezone changed to {timezone}.",
+        "currency_converted": "  ≈ {converted} ({rate})",
+        "recurring_title": "🔄 Your recurring transactions:",
+        "recurring_empty": "No recurring transactions set up.",
+        "recurring_item": "  #{id} {icon} {description} — {amount} [{category}] (day {day}, {status})",
+        "recurring_active": "active",
+        "recurring_paused": "paused",
+        "addrecurring_usage": (
+            "Use: /addrecurring <description> <amount> [day]\n"
+            "Example: /addrecurring rent 1500 5\n"
+            "Income: /addrecurring +salary 5000 1"
+        ),
+        "addrecurring_done": "🔄 Recurring #{id} created: {description} — {amount} (day {day})",
+        "delrecurring_usage": "Use: /delrecurring <id>\nExample: /delrecurring 1",
+        "delrecurring_done": "🗑️ Recurring #{id} removed.",
+        "delrecurring_not_found": "Recurring #{id} not found.",
+        "togglerecurring_usage": "Use: /togglerecurring <id>\nExample: /togglerecurring 1",
+        "togglerecurring_done": "🔄 Recurring #{id} is now {status}.",
+        "recurring_executed": "🔄 Auto-transaction #{tx_id}: {description} — {amount}",
+        "export_usage": "Use: /export [period]\nPeriods: today, week, month (default: month)",
+        "export_empty": "No records found to export for this period.",
+        "export_csv_caption": "📊 CSV Export — {period}",
+        "export_pdf_caption": "📊 PDF Export — {period}",
         "today_title": "📋 Today ({date})",
         "week_title": "📋 This Week",
         "month_title": "📋 {month}/{year}",
@@ -408,6 +468,14 @@ BOT: dict[str, dict[str, str]] = {
             "  /setpassword <パスワード> — パスワード設定\n"
             "  {dashboard_url}\n"
             "\n"
+            "🔄 定期取引:\n"
+            "  /recurring — 一覧表示\n"
+            "  /addrecurring — 新規作成\n"
+            "  /delrecurring — 削除\n"
+            "\n"
+            "📤 エクスポート:\n"
+            "  /export — CSV + PDFエクスポート\n"
+            "\n"
             "⚙️ 設定:\n"
             "  /config — 現在の設定を表示\n"
             "  /lang — 言語\n"
@@ -457,6 +525,28 @@ BOT: dict[str, dict[str, str]] = {
         "setcurrency_done": "💱 デフォルト通貨を {currency} に変更しました。",
         "settimezone_prompt": "🕐 タイムゾーンを選んでください:",
         "settimezone_done": "🕐 タイムゾーンを {timezone} に変更しました。",
+        "currency_converted": "  ≈ {converted} ({rate})",
+        "recurring_title": "🔄 定期取引一覧:",
+        "recurring_empty": "定期取引は登録されていません。",
+        "recurring_item": "  #{id} {icon} {description} — {amount} [{category}] ({day}日, {status})",
+        "recurring_active": "有効",
+        "recurring_paused": "一時停止",
+        "addrecurring_usage": (
+            "使い方: /addrecurring <説明> <金額> [日]\n"
+            "例: /addrecurring 家賃 150000 5\n"
+            "収入: /addrecurring +給料 300000 1"
+        ),
+        "addrecurring_done": "🔄 定期 #{id} 作成: {description} — {amount} ({day}日)",
+        "delrecurring_usage": "使い方: /delrecurring <id>\n例: /delrecurring 1",
+        "delrecurring_done": "🗑️ 定期 #{id} を削除しました。",
+        "delrecurring_not_found": "定期 #{id} が見つかりません。",
+        "togglerecurring_usage": "使い方: /togglerecurring <id>\n例: /togglerecurring 1",
+        "togglerecurring_done": "🔄 定期 #{id} は{status}になりました。",
+        "recurring_executed": "🔄 自動取引 #{tx_id}: {description} — {amount}",
+        "export_usage": "使い方: /export [期間]\n期間: today, week, month (デフォルト: month)",
+        "export_empty": "この期間のエクスポート対象がありません。",
+        "export_csv_caption": "📊 CSVエクスポート — {period}",
+        "export_pdf_caption": "📊 PDFエクスポート — {period}",
         "today_title": "📋 今日 ({date})",
         "week_title": "📋 今週",
         "month_title": "📋 {year}年{month}",
@@ -559,6 +649,19 @@ DASH: dict[str, dict[str, str]] = {
         "settings_currency": "💱 Moeda Padrão",
         "settings_timezone": "🕐 Fuso Horário",
         "settings_saved": "✅ Configurações salvas!",
+        "export_csv": "📥 Exportar CSV",
+        "export_pdf": "📥 Exportar PDF",
+        "sidebar_currency_filter": "💱 Moeda",
+        "currency_all": "Todas",
+        "col_currency": "Moeda",
+        "recurring_title": "🔄 Recorrentes",
+        "recurring_col_desc": "Descrição",
+        "recurring_col_amount": "Valor",
+        "recurring_col_day": "Dia",
+        "recurring_col_status": "Status",
+        "recurring_col_next": "Próximo",
+        "recurring_active": "Ativo",
+        "recurring_paused": "Pausado",
     },
     "en": {
         "page_title": "Finance Dashboard",
@@ -646,6 +749,19 @@ DASH: dict[str, dict[str, str]] = {
         "settings_currency": "💱 Default Currency",
         "settings_timezone": "🕐 Timezone",
         "settings_saved": "✅ Settings saved!",
+        "export_csv": "📥 Export CSV",
+        "export_pdf": "📥 Export PDF",
+        "sidebar_currency_filter": "💱 Currency",
+        "currency_all": "All",
+        "col_currency": "Currency",
+        "recurring_title": "🔄 Recurring",
+        "recurring_col_desc": "Description",
+        "recurring_col_amount": "Amount",
+        "recurring_col_day": "Day",
+        "recurring_col_status": "Status",
+        "recurring_col_next": "Next",
+        "recurring_active": "Active",
+        "recurring_paused": "Paused",
     },
     "ja": {
         "page_title": "Finance Dashboard",
@@ -733,6 +849,19 @@ DASH: dict[str, dict[str, str]] = {
         "settings_currency": "💱 デフォルト通貨",
         "settings_timezone": "🕐 タイムゾーン",
         "settings_saved": "✅ 設定を保存しました！",
+        "export_csv": "📥 CSVエクスポート",
+        "export_pdf": "📥 PDFエクスポート",
+        "sidebar_currency_filter": "💱 通貨",
+        "currency_all": "すべて",
+        "col_currency": "通貨",
+        "recurring_title": "🔄 定期取引",
+        "recurring_col_desc": "説明",
+        "recurring_col_amount": "金額",
+        "recurring_col_day": "日",
+        "recurring_col_status": "ステータス",
+        "recurring_col_next": "次回",
+        "recurring_active": "有効",
+        "recurring_paused": "一時停止",
     },
 }
 
