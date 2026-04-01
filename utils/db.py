@@ -493,6 +493,23 @@ def get_category_id(name_key: str) -> int | None:
 
 
 # ---------------------------------------------------------------------------
+# Currencies
+# ---------------------------------------------------------------------------
+
+def get_available_currencies() -> list[dict]:
+    """Return all supported currencies."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT code, name, symbol FROM currencies ORDER BY code").fetchall()
+    return [dict(r) for r in rows]
+
+
+def is_valid_currency(code: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT 1 FROM currencies WHERE code = ?", (code.upper(),)).fetchone()
+    return row is not None
+
+
+# ---------------------------------------------------------------------------
 # User preferences
 # ---------------------------------------------------------------------------
 

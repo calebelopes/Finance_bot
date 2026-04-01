@@ -27,14 +27,34 @@ def detect_lang(telegram_language_code: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def fmt_currency(value: float, lang: str = "pt") -> str:
-    """Format a float as a locale-appropriate currency string."""
+_CURRENCY_SYMBOLS = {"BRL": "R$", "USD": "$", "EUR": "€", "JPY": "¥", "GBP": "£"}
+
+
+def fmt_currency(value: float, lang: str = "pt", currency_code: str | None = None) -> str:
+    """Format a float as a locale-appropriate currency string.
+
+    If *currency_code* is given, it takes precedence over the lang-based default.
+    """
+    symbol = _CURRENCY_SYMBOLS.get(currency_code, "") if currency_code else ""
+    no_decimals = currency_code == "JPY" if currency_code else (lang == "ja")
+
+    if no_decimals:
+        formatted = f"{value:,.0f}"
+    elif lang == "pt":
+        s = f"{value:,.2f}"
+        formatted = s.replace(",", "X").replace(".", ",").replace("X", ".")
+    else:
+        formatted = f"{value:,.2f}"
+
+    if symbol:
+        sep = " " if currency_code == "BRL" else ""
+        return f"{symbol}{sep}{formatted}"
+
     if lang == "ja":
-        return f"\u00a5{value:,.0f}"
+        return f"¥{formatted}"
     if lang == "en":
-        return f"${value:,.2f}"
-    s = f"{value:,.2f}"
-    return "R$ " + s.replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"${formatted}"
+    return f"R$ {formatted}"
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +210,11 @@ BOT: dict[str, dict[str, str]] = {
             "  /setpassword <senha> — definir senha do dashboard\n"
             "  {dashboard_url}\n"
             "\n"
-            "🌐 Idioma: /lang"
+            "⚙️ Configurações:\n"
+            "  /config — ver configurações atuais\n"
+            "  /lang — idioma\n"
+            "  /setcurrency — moeda padrão\n"
+            "  /settimezone — fuso horário"
         ),
         "greeting": (
             "Olá! 👋\n"
@@ -226,6 +250,15 @@ BOT: dict[str, dict[str, str]] = {
         "admin_not_allowed": "⛔ Apenas o dono do bot pode usar este comando.",
         "lang_set": "🌐 Idioma alterado para Português.",
         "lang_prompt": "🌐 Escolha seu idioma / Choose your language / 言語を選択:",
+        "config_title": "⚙️ Suas configurações:",
+        "config_lang": "🌐 Idioma: {value}",
+        "config_currency": "💱 Moeda padrão: {value}",
+        "config_timezone": "🕐 Fuso horário: {value}",
+        "config_hint": "Use /setcurrency, /settimezone ou /lang para alterar.",
+        "setcurrency_prompt": "💱 Escolha sua moeda padrão:",
+        "setcurrency_done": "💱 Moeda padrão alterada para {currency}.",
+        "settimezone_prompt": "🕐 Escolha seu fuso horário:",
+        "settimezone_done": "🕐 Fuso horário alterado para {timezone}.",
         "today_title": "📋 Hoje ({date})",
         "week_title": "📋 Semana",
         "month_title": "📋 {month}/{year}",
@@ -276,7 +309,11 @@ BOT: dict[str, dict[str, str]] = {
             "  /setpassword <pass> — set dashboard password\n"
             "  {dashboard_url}\n"
             "\n"
-            "🌐 Language: /lang"
+            "⚙️ Settings:\n"
+            "  /config — view current settings\n"
+            "  /lang — language\n"
+            "  /setcurrency — default currency\n"
+            "  /settimezone — timezone"
         ),
         "greeting": (
             "Hello! 👋\n"
@@ -312,6 +349,15 @@ BOT: dict[str, dict[str, str]] = {
         "admin_not_allowed": "⛔ Only the bot owner can use this command.",
         "lang_set": "🌐 Language changed to English.",
         "lang_prompt": "🌐 Escolha seu idioma / Choose your language / 言語を選択:",
+        "config_title": "⚙️ Your settings:",
+        "config_lang": "🌐 Language: {value}",
+        "config_currency": "💱 Default currency: {value}",
+        "config_timezone": "🕐 Timezone: {value}",
+        "config_hint": "Use /setcurrency, /settimezone or /lang to change.",
+        "setcurrency_prompt": "💱 Choose your default currency:",
+        "setcurrency_done": "💱 Default currency changed to {currency}.",
+        "settimezone_prompt": "🕐 Choose your timezone:",
+        "settimezone_done": "🕐 Timezone changed to {timezone}.",
         "today_title": "📋 Today ({date})",
         "week_title": "📋 This Week",
         "month_title": "📋 {month}/{year}",
@@ -362,7 +408,11 @@ BOT: dict[str, dict[str, str]] = {
             "  /setpassword <パスワード> — パスワード設定\n"
             "  {dashboard_url}\n"
             "\n"
-            "🌐 言語: /lang"
+            "⚙️ 設定:\n"
+            "  /config — 現在の設定を表示\n"
+            "  /lang — 言語\n"
+            "  /setcurrency — デフォルト通貨\n"
+            "  /settimezone — タイムゾーン"
         ),
         "greeting": (
             "こんにちは！ 👋\n"
@@ -398,6 +448,15 @@ BOT: dict[str, dict[str, str]] = {
         "admin_not_allowed": "⛔ このコマンドはボットのオーナーのみ使用できます。",
         "lang_set": "🌐 言語を日本語に変更しました。",
         "lang_prompt": "🌐 Escolha seu idioma / Choose your language / 言語を選択:",
+        "config_title": "⚙️ 現在の設定:",
+        "config_lang": "🌐 言語: {value}",
+        "config_currency": "💱 デフォルト通貨: {value}",
+        "config_timezone": "🕐 タイムゾーン: {value}",
+        "config_hint": "/setcurrency, /settimezone, /lang で変更できます。",
+        "setcurrency_prompt": "💱 デフォルト通貨を選んでください:",
+        "setcurrency_done": "💱 デフォルト通貨を {currency} に変更しました。",
+        "settimezone_prompt": "🕐 タイムゾーンを選んでください:",
+        "settimezone_done": "🕐 タイムゾーンを {timezone} に変更しました。",
         "today_title": "📋 今日 ({date})",
         "week_title": "📋 今週",
         "month_title": "📋 {year}年{month}",
@@ -496,6 +555,10 @@ DASH: dict[str, dict[str, str]] = {
         "admin_no_data": "Nenhum dado na plataforma ainda.",
         "admin_switch_personal": "👤 Meu Painel",
         "admin_switch_admin": "🛡️ Painel Admin",
+        "settings_title": "⚙️ Configurações",
+        "settings_currency": "💱 Moeda Padrão",
+        "settings_timezone": "🕐 Fuso Horário",
+        "settings_saved": "✅ Configurações salvas!",
     },
     "en": {
         "page_title": "Finance Dashboard",
@@ -579,6 +642,10 @@ DASH: dict[str, dict[str, str]] = {
         "admin_no_data": "No platform data yet.",
         "admin_switch_personal": "👤 My Dashboard",
         "admin_switch_admin": "🛡️ Admin Panel",
+        "settings_title": "⚙️ Settings",
+        "settings_currency": "💱 Default Currency",
+        "settings_timezone": "🕐 Timezone",
+        "settings_saved": "✅ Settings saved!",
     },
     "ja": {
         "page_title": "Finance Dashboard",
@@ -662,10 +729,35 @@ DASH: dict[str, dict[str, str]] = {
         "admin_no_data": "プラットフォームデータがありません。",
         "admin_switch_personal": "👤 マイダッシュボード",
         "admin_switch_admin": "🛡️ 管理パネル",
+        "settings_title": "⚙️ 設定",
+        "settings_currency": "💱 デフォルト通貨",
+        "settings_timezone": "🕐 タイムゾーン",
+        "settings_saved": "✅ 設定を保存しました！",
     },
 }
 
 LANG_LABELS = {"pt": "🇧🇷 Português", "en": "🇺🇸 English", "ja": "🇯🇵 日本語"}
+
+CURRENCY_LABELS = {
+    "BRL": "🇧🇷 BRL — Real",
+    "USD": "🇺🇸 USD — Dollar",
+    "EUR": "🇪🇺 EUR — Euro",
+    "JPY": "🇯🇵 JPY — Yen",
+    "GBP": "🇬🇧 GBP — Pound",
+}
+
+TIMEZONE_LABELS: dict[str, str] = {
+    "America/Sao_Paulo": "🇧🇷 São Paulo (GMT-3)",
+    "America/New_York": "🇺🇸 New York (GMT-5)",
+    "America/Chicago": "🇺🇸 Chicago (GMT-6)",
+    "America/Los_Angeles": "🇺🇸 Los Angeles (GMT-8)",
+    "Europe/London": "🇬🇧 London (GMT+0)",
+    "Europe/Berlin": "🇪🇺 Berlin (GMT+1)",
+    "Europe/Lisbon": "🇵🇹 Lisbon (GMT+0)",
+    "Asia/Tokyo": "🇯🇵 Tokyo (GMT+9)",
+    "Asia/Shanghai": "🇨🇳 Shanghai (GMT+8)",
+    "Australia/Sydney": "🇦🇺 Sydney (GMT+11)",
+}
 
 
 # ---------------------------------------------------------------------------

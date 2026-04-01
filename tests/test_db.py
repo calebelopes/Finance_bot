@@ -287,3 +287,42 @@ class TestUserPreferences:
         db.ensure_user_with_lang(802, "prefuser3")
         with pytest.raises(ValueError, match="Unknown preference key"):
             db.set_user_preference(802, "invalid_key", "value")
+
+    def test_set_timezone(self):
+        db.ensure_user_with_lang(803, "tzuser")
+        db.set_user_preference(803, "timezone", "Asia/Tokyo")
+        prefs = db.get_user_preferences(803)
+        assert prefs["timezone"] == "Asia/Tokyo"
+
+    def test_set_currency_default(self):
+        db.ensure_user_with_lang(804, "curuser")
+        db.set_user_preference(804, "currency_default", "USD")
+        prefs = db.get_user_preferences(804)
+        assert prefs["currency_default"] == "USD"
+
+    def test_set_confirmation_mode(self):
+        db.ensure_user_with_lang(805, "confuser")
+        db.set_user_preference(805, "confirmation_mode", "ask")
+        prefs = db.get_user_preferences(805)
+        assert prefs["confirmation_mode"] == "ask"
+
+
+class TestCurrencies:
+    def test_get_available_currencies(self):
+        currencies = db.get_available_currencies()
+        codes = {c["code"] for c in currencies}
+        assert {"BRL", "USD", "EUR", "JPY", "GBP"} <= codes
+
+    def test_is_valid_currency_true(self):
+        assert db.is_valid_currency("BRL") is True
+        assert db.is_valid_currency("usd") is True
+
+    def test_is_valid_currency_false(self):
+        assert db.is_valid_currency("XYZ") is False
+
+    def test_store_transaction_with_currency(self):
+        db.store_transaction(
+            900, "curtest", "dinner", 20.0, "Refeição", currency_code="USD",
+        )
+        txs = db.get_transactions(900, *_WIDE_RANGE)
+        assert txs[0]["currency_code"] == "USD"

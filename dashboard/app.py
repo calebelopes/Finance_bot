@@ -18,8 +18,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from utils.db import setup_database  # noqa: E402
 from utils.i18n import (  # noqa: E402
+    CURRENCY_LABELS,
     LANG_LABELS,
     MONTHS,
+    TIMEZONE_LABELS,
     cat_name,
     d,
     fmt_currency,
@@ -140,6 +142,32 @@ def _clear_session(user_id: int) -> None:
 def _save_lang(user_id: int, lang: str) -> None:
     conn = _db_conn()
     conn.execute("UPDATE users SET lang = ? WHERE id = ?", (lang, user_id))
+    conn.commit()
+    conn.close()
+
+
+def _get_user_preferences(user_id: int) -> dict:
+    conn = _db_conn()
+    row = conn.execute(
+        "SELECT * FROM user_preferences WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    if not row:
+        conn.execute("INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM user_preferences WHERE user_id = ?", (user_id,)
+        ).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def _save_user_preference(user_id: int, key: str, value: str) -> None:
+    allowed = {"currency_default", "timezone", "confirmation_mode"}
+    if key not in allowed:
+        return
+    conn = _db_conn()
+    conn.execute("INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)", (user_id,))
+    conn.execute(f"UPDATE user_preferences SET {key} = ? WHERE user_id = ?", (value, user_id))
     conn.commit()
     conn.close()
 
@@ -424,6 +452,41 @@ if new_lang != lang:
     _save_lang(user_id, new_lang)
     st.session_state["user"]["lang"] = new_lang
     st.rerun()
+
+_user_prefs = _get_user_preferences(user_id)
+
+with st.sidebar.expander(d("settings_title", lang)):
+    _currency_options = list(CURRENCY_LABELS.values())
+    _currency_codes = list(CURRENCY_LABELS.keys())
+    _cur_currency = _user_prefs.get("currency_default", "BRL")
+    _cur_currency_idx = _currency_codes.index(_cur_currency) if _cur_currency in _currency_codes else 0
+
+    _sel_currency_label = st.selectbox(
+        d("settings_currency", lang),
+        _currency_options,
+        index=_cur_currency_idx,
+    )
+    _new_currency = _currency_codes[_currency_options.index(_sel_currency_label)]
+    if _new_currency != _cur_currency:
+        _save_user_preference(user_id, "currency_default", _new_currency)
+        st.success(d("settings_saved", lang))
+        st.rerun()
+
+    _tz_options = list(TIMEZONE_LABELS.values())
+    _tz_keys = list(TIMEZONE_LABELS.keys())
+    _cur_tz = _user_prefs.get("timezone", "America/Sao_Paulo")
+    _cur_tz_idx = _tz_keys.index(_cur_tz) if _cur_tz in _tz_keys else 0
+
+    _sel_tz_label = st.selectbox(
+        d("settings_timezone", lang),
+        _tz_options,
+        index=_cur_tz_idx,
+    )
+    _new_tz = _tz_keys[_tz_options.index(_sel_tz_label)]
+    if _new_tz != _cur_tz:
+        _save_user_preference(user_id, "timezone", _new_tz)
+        st.success(d("settings_saved", lang))
+        st.rerun()
 
 if st.sidebar.button(d("sidebar_logout", lang), use_container_width=True):
     _clear_session(user_id)

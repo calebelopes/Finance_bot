@@ -1,4 +1,4 @@
-from utils.i18n import cat_name, d, detect_lang, fmt_currency, t
+from utils.i18n import CURRENCY_LABELS, TIMEZONE_LABELS, cat_name, d, detect_lang, fmt_currency, t
 
 
 class TestDetectLang:
@@ -30,6 +30,50 @@ class TestFmtCurrency:
 
     def test_ja(self):
         assert fmt_currency(1234, "ja") == "¥1,234"
+
+
+class TestFmtCurrencyWithCode:
+    def test_brl(self):
+        assert fmt_currency(1234.56, "pt", currency_code="BRL") == "R$ 1.234,56"
+
+    def test_usd_pt_locale(self):
+        assert fmt_currency(1234.56, "pt", currency_code="USD") == "$1.234,56"
+
+    def test_usd_en_locale(self):
+        assert fmt_currency(1234.56, "en", currency_code="USD") == "$1,234.56"
+
+    def test_eur(self):
+        assert fmt_currency(1234.56, "en", currency_code="EUR") == "€1,234.56"
+
+    def test_jpy_no_decimals(self):
+        assert fmt_currency(1234, "en", currency_code="JPY") == "¥1,234"
+
+    def test_gbp(self):
+        assert fmt_currency(50.0, "en", currency_code="GBP") == "£50.00"
+
+
+class TestConstants:
+    def test_currency_labels_has_all(self):
+        assert set(CURRENCY_LABELS.keys()) == {"BRL", "USD", "EUR", "JPY", "GBP"}
+
+    def test_timezone_labels_nonempty(self):
+        assert len(TIMEZONE_LABELS) >= 5
+        assert "America/Sao_Paulo" in TIMEZONE_LABELS
+        assert "Asia/Tokyo" in TIMEZONE_LABELS
+
+
+class TestSettingsTranslations:
+    def test_config_strings_all_langs(self):
+        for lang in ("pt", "en", "ja"):
+            assert t("config_title", lang)
+            assert t("setcurrency_prompt", lang)
+            assert t("settimezone_prompt", lang)
+
+    def test_dashboard_settings_strings(self):
+        for lang in ("pt", "en", "ja"):
+            assert d("settings_title", lang)
+            assert d("settings_currency", lang)
+            assert d("settings_timezone", lang)
 
 
 class TestBotTranslation:

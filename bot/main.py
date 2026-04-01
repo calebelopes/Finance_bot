@@ -30,9 +30,11 @@ from telegram.request import HTTPXRequest  # noqa: E402
 from utils import categories, db  # noqa: E402
 from utils.i18n import (  # noqa: E402
     ALL_GREETINGS,
+    CURRENCY_LABELS,
     LANG_LABELS,
     MONTHS,
     SUPPORTED_LANGS,
+    TIMEZONE_LABELS,
     cat_name,
     detect_lang,
     fmt_currency,
@@ -52,7 +54,16 @@ def _dashboard_url() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _get_timezone() -> ZoneInfo:
+def _get_timezone(user_id: int | None = None) -> ZoneInfo:
+    """Return the user's timezone if available, else fall back to env var / default."""
+    if user_id:
+        prefs = db.get_user_preferences(user_id)
+        tz_name = prefs.get("timezone")
+        if tz_name:
+            try:
+                return ZoneInfo(tz_name)
+            except (KeyError, Exception):
+                pass
     return ZoneInfo(os.getenv("TIMEZONE", "America/Sao_Paulo"))
 
 
@@ -79,8 +90,8 @@ def _get_lang(update: Update) -> str:
     return detected
 
 
-def _period_range_utc(period: str) -> tuple[str, str]:
-    tz = _get_timezone()
+def _period_range_utc(period: str, user_id: int | None = None) -> tuple[str, str]:
+    tz = _get_timezone(user_id)
     now_local = datetime.datetime.now(tz)
     today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -105,15 +116,15 @@ def _period_range_utc(period: str) -> tuple[str, str]:
     return to_utc(start), to_utc(end)
 
 
-def _utc_to_local_str(utc_iso: str) -> str:
-    tz = _get_timezone()
+def _utc_to_local_str(utc_iso: str, user_id: int | None = None) -> str:
+    tz = _get_timezone(user_id)
     dt = datetime.datetime.fromisoformat(utc_iso)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=datetime.UTC)
     return dt.astimezone(tz).strftime("%H:%M")
 
 
-def _format_transactions(transactions: list[dict], title: str, lang: str) -> str:
+def _format_transactions(transactions: list[dict], title: str, lang: str, user_id: int | None = None) -> str:
     if not transactions:
         return f"{title}\n\n{t('no_expenses', lang)}"
 
@@ -129,7 +140,7 @@ def _format_transactions(transactions: list[dict], title: str, lang: str) -> str
         else:
             total_expense += tx["amount_original"]
         value_str = fmt_currency(tx["amount_original"], lang)
-        time_str = _utc_to_local_str(tx["created_at"])
+        time_str = _utc_to_local_str(tx["created_at"], user_id)
         cat_display = cat_name(tx["category"], lang)
         sign = "+" if is_income else "-"
         lines.append(
@@ -206,11 +217,11 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     lang = _get_lang(update)
     try:
-        start_utc, end_utc = _period_range_utc("today")
+        start_utc, end_utc = _period_range_utc("today", user.id)
         txs = db.get_transactions(user.id, start_utc, end_utc)
-        now_local = datetime.datetime.now(_get_timezone())
+        now_local = datetime.datetime.now(_get_timezone(user.id))
         title = t("today_title", lang, date=now_local.strftime("%d/%m/%Y"))
-        await update.message.reply_text(_format_transactions(txs, title, lang))
+        await update.message.reply_text(_format_transactions(txs, title, lang, user.id))
     except Exception:
         log.exception("Error in /today")
         await update.message.reply_text(t("error", lang))
@@ -223,10 +234,10 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     lang = _get_lang(update)
     try:
-        start_utc, end_utc = _period_range_utc("week")
+        start_utc, end_utc = _period_range_utc("week", user.id)
         txs = db.get_transactions(user.id, start_utc, end_utc)
         title = t("week_title", lang)
-        await update.message.reply_text(_format_transactions(txs, title, lang))
+        await update.message.reply_text(_format_transactions(txs, title, lang, user.id))
     except Exception:
         log.exception("Error in /week")
         await update.message.reply_text(t("error", lang))
@@ -239,12 +250,12 @@ async def cmd_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     lang = _get_lang(update)
     try:
-        start_utc, end_utc = _period_range_utc("month")
+        start_utc, end_utc = _period_range_utc("month", user.id)
         txs = db.get_transactions(user.id, start_utc, end_utc)
-        now_local = datetime.datetime.now(_get_timezone())
+        now_local = datetime.datetime.now(_get_timezone(user.id))
         month_name = MONTHS[lang][now_local.month]
         title = t("month_title", lang, month=month_name, year=now_local.year)
-        await update.message.reply_text(_format_transactions(txs, title, lang))
+        await update.message.reply_text(_format_transactions(txs, title, lang, user.id))
     except Exception:
         log.exception("Error in /month")
         await update.message.reply_text(t("error", lang))
@@ -257,8 +268,8 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     lang = _get_lang(update)
     try:
-        start_utc, end_utc = _period_range_utc("month")
-        now_local = datetime.datetime.now(_get_timezone())
+        start_utc, end_utc = _period_range_utc("month", user.id)
+        now_local = datetime.datetime.now(_get_timezone(user.id))
         month_name = MONTHS[lang][now_local.month]
         title = t("summary_title", lang, month=month_name, year=now_local.year)
 
@@ -380,6 +391,80 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(t(msg_key, lang))
 
 
+async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not _is_authorized(user.id):
+        await update.message.reply_text(t("unauthorized", "pt"))
+        return
+    lang = _get_lang(update)
+    prefs = db.get_user_preferences(user.id)
+    lines = [
+        t("config_title", lang),
+        t("config_lang", lang, value=LANG_LABELS.get(lang, lang)),
+        t("config_currency", lang, value=prefs.get("currency_default", "BRL")),
+        t("config_timezone", lang, value=prefs.get("timezone", "America/Sao_Paulo")),
+        "",
+        t("config_hint", lang),
+    ]
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_setcurrency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not _is_authorized(user.id):
+        await update.message.reply_text(t("unauthorized", "pt"))
+        return
+    lang = _get_lang(update)
+    keyboard = [
+        [InlineKeyboardButton(label, callback_data=f"currency:{code}")]
+        for code, label in CURRENCY_LABELS.items()
+    ]
+    await update.message.reply_text(
+        t("setcurrency_prompt", lang),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def cb_setcurrency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    chosen = query.data.split(":", 1)[1].upper()
+    if not db.is_valid_currency(chosen):
+        return
+    user_id = query.from_user.id
+    db.set_user_preference(user_id, "currency_default", chosen)
+    lang = db.get_user_lang(user_id)
+    await query.edit_message_text(t("setcurrency_done", lang, currency=chosen))
+
+
+async def cmd_settimezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not _is_authorized(user.id):
+        await update.message.reply_text(t("unauthorized", "pt"))
+        return
+    lang = _get_lang(update)
+    keyboard = [
+        [InlineKeyboardButton(label, callback_data=f"tz:{tz_key}")]
+        for tz_key, label in TIMEZONE_LABELS.items()
+    ]
+    await update.message.reply_text(
+        t("settimezone_prompt", lang),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def cb_settimezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    chosen = query.data.split(":", 1)[1]
+    if chosen not in TIMEZONE_LABELS:
+        return
+    user_id = query.from_user.id
+    db.set_user_preference(user_id, "timezone", chosen)
+    lang = db.get_user_lang(user_id)
+    await query.edit_message_text(t("settimezone_done", lang, timezone=chosen))
+
+
 async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not _is_authorized(user.id):
@@ -446,8 +531,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     try:
         category = categories.infer_category(description, action_type)
+        prefs = db.get_user_preferences(user.id)
+        user_currency = prefs.get("currency_default", "BRL")
         tx_id = db.store_transaction(
             user.id, user.username, description, value, category, action_type,
+            currency_code=user_currency,
         )
         value_str = fmt_currency(value, lang)
         cat_display = cat_name(category, lang)
@@ -518,6 +606,11 @@ def main() -> None:
     application.add_handler(CommandHandler(["edit", "editar", "henshuu"], cmd_edit))
     application.add_handler(CommandHandler(["setpassword", "senha", "password"], cmd_setpassword))
     application.add_handler(CommandHandler(["admin", "kanri"], cmd_admin))
+    application.add_handler(CommandHandler(["config", "configurar", "settei"], cmd_config))
+    application.add_handler(CommandHandler(["setcurrency", "moeda", "tsuuka"], cmd_setcurrency))
+    application.add_handler(CallbackQueryHandler(cb_setcurrency, pattern=r"^currency:"))
+    application.add_handler(CommandHandler(["settimezone", "fuso", "jikan"], cmd_settimezone))
+    application.add_handler(CallbackQueryHandler(cb_settimezone, pattern=r"^tz:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     application.run_polling()
