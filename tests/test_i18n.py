@@ -171,3 +171,36 @@ class TestDashTranslation:
         result = d("showing", "en", shown=5, total=10)
         assert "5" in result
         assert "10" in result
+
+
+class TestNLPTranslations:
+    """Verify NLP/Module-7 i18n keys exist in all languages."""
+
+    NLP_KEYS = ["backdated", "low_confidence", "category_corrected"]
+
+    def test_bot_keys_present_pt(self):
+        for key in self.NLP_KEYS:
+            result = t(key, "pt", date="01/01/2025", category="Refeição", id=1)
+            assert result and "{" not in result
+
+    def test_bot_keys_present_en(self):
+        for key in self.NLP_KEYS:
+            result = t(key, "en", date="01/01/2025", category="Meal", id=1)
+            assert result and "{" not in result
+
+    def test_bot_keys_present_ja(self):
+        for key in self.NLP_KEYS:
+            result = t(key, "ja", date="01/01/2025", category="食事", id=1)
+            assert result and "{" not in result
+
+    def test_backdated_contains_date(self):
+        assert "15/03" in t("backdated", "pt", date="15/03/2025")
+        assert "15/03" in t("backdated", "en", date="15/03/2025")
+
+    def test_low_confidence_contains_category(self):
+        assert "Refeição" in t("low_confidence", "pt", category="Refeição")
+        assert "Meal" in t("low_confidence", "en", category="Meal")
+
+    def test_category_corrected_contains_id(self):
+        assert "42" in t("category_corrected", "pt", id=42, category="Lazer")
+        assert "42" in t("category_corrected", "en", id=42, category="Entertainment")

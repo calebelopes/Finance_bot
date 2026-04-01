@@ -234,8 +234,23 @@ lang: str = current_user.get("lang", "pt")
 _is_admin_user: bool = current_user.get("is_admin", False)
 
 
+_user_currency_code: str = ""
+
+_CURRENCY_SYMBOLS = {"BRL": "R$", "USD": "$", "EUR": "€", "JPY": "¥", "GBP": "£"}
+
+
 def _fmt(value: float) -> str:
-    return fmt_currency(value, lang)
+    return fmt_currency(value, lang, currency_code=_user_currency_code or None)
+
+
+def _currency_axis_label() -> str:
+    return _CURRENCY_SYMBOLS.get(_user_currency_code, _user_currency_code or "$")
+
+
+def _cumulative_axis_label() -> str:
+    sym = _currency_axis_label()
+    suffix = {"pt": "(acumulado)", "en": "(cumulative)", "ja": "(累計)"}
+    return f"{sym} {suffix.get(lang, suffix['en'])}"
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +351,7 @@ def show_admin_panel() -> None:
             ))
             fig_daily.update_layout(
                 barmode="group",
-                xaxis_title="", yaxis_title=d("currency_axis", lang),
+                xaxis_title="", yaxis_title=_currency_axis_label(),
                 margin=dict(l=0, r=0, t=10, b=0),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -457,6 +472,7 @@ if new_lang != lang:
     st.rerun()
 
 _user_prefs = _get_user_preferences(user_id)
+_user_currency_code = _user_prefs.get("currency_default", "BRL")
 
 with st.sidebar.expander(d("settings_title", lang)):
     _currency_options = list(CURRENCY_LABELS.values())
@@ -737,7 +753,7 @@ with r1c1:
         color_discrete_map=color_map, barmode="group",
     )
     fig.update_layout(
-        yaxis_title=d("currency_axis", lang),
+        yaxis_title=_currency_axis_label(),
         xaxis_title="",
         hovermode="x unified",
         margin=dict(l=0, r=0, t=10, b=0),
@@ -793,7 +809,7 @@ with r2c1:
         text=cat_sorted["Total"].apply(lambda v: _fmt(v)),
     )
     fig.update_layout(
-        xaxis_title=d("currency_axis", lang),
+        xaxis_title=_currency_axis_label(),
         yaxis_title="",
         showlegend=False,
         margin=dict(l=0, r=0, t=10, b=0),
@@ -819,7 +835,7 @@ with r2c2:
         color_discrete_sequence=["#2196F3"],
     )
     fig.update_layout(
-        yaxis_title=d("cumulative_axis", lang),
+        yaxis_title=_cumulative_axis_label(),
         xaxis_title="",
         hovermode="x unified",
         margin=dict(l=0, r=0, t=10, b=0),
@@ -862,7 +878,7 @@ if not df_prev.empty:
     ))
     fig_cmp.update_layout(
         barmode="group",
-        xaxis_title="", yaxis_title=d("currency_axis", lang),
+        xaxis_title="", yaxis_title=_currency_axis_label(),
         margin=dict(l=0, r=0, t=10, b=0),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -901,7 +917,7 @@ if not monthly.empty:
     fig_m.update_layout(
         barmode="group",
         xaxis_title="",
-        yaxis_title=d("currency_axis", lang),
+        yaxis_title=_currency_axis_label(),
         margin=dict(l=0, r=0, t=10, b=0),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",

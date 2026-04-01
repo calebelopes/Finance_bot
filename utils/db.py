@@ -356,11 +356,13 @@ def store_transaction(
     amount_converted: float | None = None,
     exchange_rate: float | None = None,
     recurring_id: int | None = None,
+    created_at_override: str | None = None,
+    confidence_score: float | None = None,
 ) -> int:
     """Atomically: upsert user, insert transaction, log usage event. Returns the new row id."""
     with _connect() as conn:
         _ensure_user(conn, user_id, username)
-        created_at = _utc_now()
+        created_at = created_at_override or _utc_now()
 
         if category_id is None:
             row = conn.execute(
@@ -374,20 +376,33 @@ def store_transaction(
                (user_id, description, amount_original, currency_code,
                 amount_converted, exchange_rate,
                 category, category_id, type, source, status,
-                recurring_id, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)""",
+                confidence_score, recurring_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)""",
             (user_id, description, amount, currency_code,
              amount_converted, exchange_rate,
              category, category_id, action_type, source,
-             recurring_id, created_at),
+             confidence_score, recurring_id, created_at),
         )
         tx_id = cur.lastrowid
         conn.execute(
             "INSERT INTO usage_events (user_id, event_type, created_at) VALUES (?, ?, ?)",
-            (user_id, "action_stored", created_at),
+            (user_id, "action_stored", _utc_now()),
         )
         conn.commit()
     return tx_id
+
+
+def update_transaction_category(user_id: int, tx_id: int, category: str) -> bool:
+    """Update the category of a transaction (for post-hoc correction)."""
+    cat_id = get_category_id(category)
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE transactions SET category = ?, category_id = ?, confidence_score = 1.0 "
+            "WHERE id = ? AND user_id = ?",
+            (category, cat_id, tx_id, user_id),
+        )
+        conn.commit()
+    return cur.rowcount > 0
 
 
 def log_app_event(event_type: str) -> None:

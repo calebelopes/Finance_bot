@@ -426,3 +426,59 @@ class TestRecurringTransactions:
             ).fetchall()
         assert len(rows) == 1
         assert rows[0]["transaction_id"] == tx_id
+
+
+class TestNLPDatabaseFeatures:
+    """Tests for Module 7 DB enhancements (created_at override, confidence, category update)."""
+
+    def test_store_with_created_at_override(self):
+        db.ensure_user_with_lang(800, "nlpuser1")
+        custom_ts = "2025-03-15T12:00:00+00:00"
+        tx_id = db.store_transaction(
+            800, "nlpuser1", "jantar", 30.0, "Refeição",
+            created_at_override=custom_ts,
+        )
+        txs = db.get_transactions(800, "2025-01-01T00:00:00", "2025-12-31T23:59:59")
+        tx = next(t for t in txs if t["id"] == tx_id)
+        assert "2025-03-15" in tx["created_at"]
+
+    def test_store_with_confidence_score(self):
+        db.ensure_user_with_lang(801, "nlpuser2")
+        tx_id = db.store_transaction(
+            801, "nlpuser2", "resturante", 45.0, "Refeição",
+            confidence_score=0.85,
+        )
+        with db._connect() as conn:
+            row = conn.execute(
+                "SELECT confidence_score FROM transactions WHERE id = ?", (tx_id,)
+            ).fetchone()
+        assert row["confidence_score"] == 0.85
+
+    def test_store_without_confidence_defaults_null(self):
+        db.ensure_user_with_lang(802, "nlpuser3")
+        tx_id = db.store_transaction(802, "nlpuser3", "jantar", 30.0, "Refeição")
+        with db._connect() as conn:
+            row = conn.execute(
+                "SELECT confidence_score FROM transactions WHERE id = ?", (tx_id,)
+            ).fetchone()
+        assert row["confidence_score"] is None
+
+    def test_update_transaction_category(self):
+        db.ensure_user_with_lang(803, "nlpuser4")
+        tx_id = db.store_transaction(
+            803, "nlpuser4", "resturante", 45.0, "Outros",
+            confidence_score=0.82,
+        )
+        assert db.update_transaction_category(803, tx_id, "Refeição") is True
+        with db._connect() as conn:
+            row = conn.execute(
+                "SELECT category, confidence_score FROM transactions WHERE id = ?",
+                (tx_id,),
+            ).fetchone()
+        assert row["category"] == "Refeição"
+        assert row["confidence_score"] == 1.0
+
+    def test_update_category_wrong_user(self):
+        db.ensure_user_with_lang(804, "nlpuser5")
+        tx_id = db.store_transaction(804, "nlpuser5", "test", 10.0, "Outros")
+        assert db.update_transaction_category(999, tx_id, "Refeição") is False

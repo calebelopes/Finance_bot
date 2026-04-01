@@ -1,3 +1,5 @@
+from difflib import SequenceMatcher
+
 # ---------------------------------------------------------------------------
 # Structured category definitions (single source of truth)
 # ---------------------------------------------------------------------------
@@ -207,18 +209,92 @@ INCOME_KEYWORDS: dict[str, list[str]] = {
 
 
 # ---------------------------------------------------------------------------
-# Keyword-based inference (unchanged behavior)
+# Keyword-based inference with fuzzy matching
 # ---------------------------------------------------------------------------
+
+_FUZZY_THRESHOLD = 0.78
+
+
+def _fuzzy_ratio(a: str, b: str) -> float:
+    return SequenceMatcher(None, a, b).ratio()
+
 
 def infer_category(description: str, action_type: str = "expense") -> str:
     """Match a transaction description to a category via keyword lookup."""
+    result, _ = infer_category_with_confidence(description, action_type)
+    return result
+
+
+def infer_category_with_confidence(
+    description: str, action_type: str = "expense",
+) -> tuple[str, float]:
+    """Match description to category, returning (category, confidence).
+
+    Confidence:
+      1.0  — exact substring match
+      0.78-0.99 — fuzzy match above threshold
+      0.0  — fell back to default category
+    """
     normalized = description.strip().lower()
     keywords_map = INCOME_KEYWORDS if action_type == "income" else CATEGORY_KEYWORDS
+    default = DEFAULT_INCOME_CATEGORY if action_type == "income" else DEFAULT_CATEGORY
+
+    # Pass 1: exact substring match (confidence = 1.0)
     for category, keywords in keywords_map.items():
         for keyword in keywords:
             if keyword in normalized:
-                return category
-    return DEFAULT_INCOME_CATEGORY if action_type == "income" else DEFAULT_CATEGORY
+                return category, 1.0
+
+    # Pass 2: fuzzy match on individual words in the description
+    desc_words = normalized.split()
+    best_score = 0.0
+    best_category = default
+
+    for category, keywords in keywords_map.items():
+        for keyword in keywords:
+            for word in desc_words:
+                ratio = _fuzzy_ratio(word, keyword)
+                if ratio > best_score:
+                    best_score = ratio
+                    best_category = category
+
+            if len(keyword.split()) > 1:
+                ratio = _fuzzy_ratio(normalized, keyword)
+                if ratio > best_score:
+                    best_score = ratio
+                    best_category = category
+
+    if best_score >= _FUZZY_THRESHOLD:
+        return best_category, round(best_score, 2)
+
+    return default, 0.0
+
+
+def get_top_categories(
+    description: str, action_type: str = "expense", n: int = 3,
+) -> list[tuple[str, float]]:
+    """Return the top *n* category matches with scores, for disambiguation UI."""
+    normalized = description.strip().lower()
+    keywords_map = INCOME_KEYWORDS if action_type == "income" else CATEGORY_KEYWORDS
+    desc_words = normalized.split()
+
+    scores: dict[str, float] = {}
+    for category, keywords in keywords_map.items():
+        best = 0.0
+        for keyword in keywords:
+            for word in desc_words:
+                ratio = _fuzzy_ratio(word, keyword)
+                if ratio > best:
+                    best = ratio
+            if len(keyword.split()) > 1:
+                ratio = _fuzzy_ratio(normalized, keyword)
+                if ratio > best:
+                    best = ratio
+        if best > 0.4:
+            scores[category] = round(best, 2)
+
+    sorted_cats = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    return sorted_cats[:n]
 
 
 # ---------------------------------------------------------------------------

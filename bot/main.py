@@ -41,7 +41,7 @@ from utils.i18n import (  # noqa: E402
     fmt_currency,
     t,
 )
-from utils.parser import parse_action_value, parse_number_ptbr  # noqa: E402
+from utils.parser import parse_number_ptbr, parse_smart  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -673,6 +673,19 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 
 
+_LOW_CONFIDENCE_THRESHOLD = 0.85
+
+
+def _compute_backdated_ts(date_offset: int, user_id: int) -> str:
+    """Return an ISO UTC timestamp backdated by *date_offset* days."""
+    tz = _get_timezone(user_id)
+    now = datetime.datetime.now(tz)
+    target = (now + datetime.timedelta(days=date_offset)).replace(
+        hour=12, minute=0, second=0, microsecond=0,
+    )
+    return target.astimezone(datetime.UTC).replace(microsecond=0).isoformat()
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not _is_authorized(user.id):
@@ -695,13 +708,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     action_type = "income" if is_income else "expense"
 
     try:
-        description, value, parsed_currency = parse_action_value(parse_text)
+        result = parse_smart(parse_text)
     except ValueError:
         await update.message.reply_text(t("invalid", lang))
         return
 
     try:
-        category = categories.infer_category(description, action_type)
+        description = result.description
+        value = result.value
+        parsed_currency = result.currency
+        date_offset = result.date_offset
+
+        category, confidence = categories.infer_category_with_confidence(
+            result.raw_description or description, action_type,
+        )
+
         prefs = db.get_user_preferences(user.id)
         user_currency = prefs.get("currency_default", "BRL")
         tx_currency = parsed_currency or user_currency
@@ -711,27 +732,82 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if tx_currency != user_currency:
             amount_converted, exchange_rate = db.convert_amount(value, tx_currency, user_currency)
 
+        created_at_override = None
+        if date_offset is not None and date_offset != 0:
+            created_at_override = _compute_backdated_ts(date_offset, user.id)
+
         tx_id = db.store_transaction(
             user.id, user.username, description, value, category, action_type,
             currency_code=tx_currency,
             amount_converted=amount_converted,
             exchange_rate=exchange_rate,
+            created_at_override=created_at_override,
+            confidence_score=confidence,
         )
+
         value_str = fmt_currency(value, lang, currency_code=tx_currency)
         cat_display = cat_name(category, lang)
         msg_key = "stored_income" if is_income else "stored_expense"
         reply = t(msg_key, lang, id=tx_id, description=description, value=value_str, category=cat_display)
+
         if amount_converted and exchange_rate:
             converted_str = fmt_currency(amount_converted, lang, currency_code=user_currency)
             reply += f"\n  ≈ {converted_str} (1 {tx_currency} = {exchange_rate:.4f} {user_currency})"
-        await update.message.reply_text(reply)
+
+        if created_at_override and date_offset is not None:
+            tz = _get_timezone(user.id)
+            bd_dt = datetime.datetime.fromisoformat(created_at_override).astimezone(tz)
+            reply += "\n" + t("backdated", lang, date=bd_dt.strftime("%d/%m/%Y"))
+
+        # Low confidence: offer category correction via inline keyboard
+        markup = None
+        if 0 < confidence < _LOW_CONFIDENCE_THRESHOLD:
+            top_cats = categories.get_top_categories(
+                result.raw_description or description, action_type, n=4,
+            )
+            buttons = []
+            for cat, _score in top_cats:
+                if cat != category:
+                    display = cat_name(cat, lang)
+                    buttons.append(
+                        InlineKeyboardButton(display, callback_data=f"fixcat:{tx_id}:{cat}")
+                    )
+            if buttons:
+                reply += "\n" + t("low_confidence", lang, category=cat_display)
+                markup = InlineKeyboardMarkup([buttons[:4]])
+
+        await update.message.reply_text(reply, reply_markup=markup)
         log.info(
-            "Stored #%d [%s] for %s (%d): %s = %.2f %s [%s]",
-            tx_id, action_type, user.username, user.id, description, value, tx_currency, category,
+            "Stored #%d [%s] for %s (%d): %s = %.2f %s [%s] (conf=%.2f)",
+            tx_id, action_type, user.username, user.id,
+            description, value, tx_currency, category, confidence,
         )
     except Exception:
         log.exception("Error storing transaction for user %d", user.id)
         await update.message.reply_text(t("error", lang))
+
+
+async def cb_fixcat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline category-correction button presses."""
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":", 2)
+    if len(parts) != 3:
+        return
+    try:
+        tx_id = int(parts[1])
+    except ValueError:
+        return
+    new_category = parts[2]
+    user_id = query.from_user.id
+    lang = db.get_user_lang(user_id)
+
+    if db.update_transaction_category(user_id, tx_id, new_category):
+        cat_display = cat_name(new_category, lang)
+        await query.edit_message_text(
+            query.message.text + "\n" + t("category_corrected", lang, id=tx_id, category=cat_display)
+        )
+    log.info("User %d corrected tx #%d category to %s", user_id, tx_id, new_category)
 
 
 # ---------------------------------------------------------------------------
@@ -834,6 +910,7 @@ def main() -> None:
     application.add_handler(CommandHandler(["delrecurring", "excluirrecorrente", "teikisakujo"], cmd_delrecurring))
     application.add_handler(CommandHandler(["togglerecurring", "alternarrecorrente", "teikikiri"], cmd_togglerecurring))
     application.add_handler(CommandHandler(["export", "exportar", "shukuryoku"], cmd_export))
+    application.add_handler(CallbackQueryHandler(cb_fixcat, pattern=r"^fixcat:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     job_queue = application.job_queue
