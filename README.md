@@ -2,6 +2,8 @@
 
 App web mobile-first para registrar e controlar gastos pessoais, com bot do Telegram opcional. Crie sua conta direto no site, registre gastos por linguagem natural ("jantar 30 usd"), acompanhe métricas e gráficos no dashboard, e — se quiser — vincule sua conta ao bot do Telegram para registrar pelo celular.
 
+> **2.0 — web-first release**: o app passou a ter uma frente web própria (FastAPI + Jinja + HTMX + Tailwind) com landing pública, signup/login com e-mail obrigatório, chat in-site, dashboard completo, recurring, admin e mobile-first. O bot do Telegram virou opcional e usa o mesmo banco. Migração de schema é automática (coluna `telegram_id` desacoplada do `users.id`).
+
 ```mermaid
 flowchart LR
   subgraph Web [Web app — FastAPI + Jinja2 + HTMX + Tailwind]
