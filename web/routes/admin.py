@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from utils import db
 from utils.i18n import d, fmt_currency
-from web.auth import require_user
+from web.auth import require_user_with_email
 from web.templates_setup import templates
 
 router = APIRouter()
@@ -60,7 +60,7 @@ def _build_admin_charts(daily_rows: list[dict], lang: str) -> tuple[dict, dict]:
 @router.get("/admin")
 async def admin_panel(
     request: Request,
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
 ):
     _admin_only(user)
     lang = user.get("lang", "pt")

@@ -100,6 +100,32 @@ async def require_user(
     return user
 
 
+async def require_user_with_email(
+    request: Request,
+    user: Annotated[dict, Depends(require_user)],
+) -> dict:
+    """Like require_user but also redirects to /email-setup when email is missing.
+
+    Used to gate the main app surfaces (chat, dashboard, recurring, admin) so
+    every account ends up with a recoverable email on file. The /email-setup
+    page itself depends on require_user (not this) so the flow can complete.
+    """
+    if not user.get("email"):
+        next_url = request.url.path
+        if request.headers.get("HX-Request") == "true":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="email required",
+                headers={"HX-Redirect": f"/email-setup?next={next_url}"},
+            )
+        raise HTTPException(
+            status_code=status.HTTP_303_SEE_OTHER,
+            detail="email required",
+            headers={"Location": f"/email-setup?next={next_url}"},
+        )
+    return user
+
+
 def redirect_unauthenticated(request: Request) -> Optional[RedirectResponse]:
     """Helper for routes that *prefer* anonymous users (e.g. /signup, /login)."""
     cookie = request.cookies.get(SESSION_COOKIE)

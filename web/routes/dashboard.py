@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, Response
 from utils import db
 from utils.export import generate_csv, generate_pdf
 from utils.i18n import MONTHS, cat_name, d, fmt_currency
-from web.auth import require_user
+from web.auth import require_user_with_email
 from web.period import (
     VALID_PERIODS,
     date_range_to_utc,
@@ -286,7 +286,7 @@ def _load_transactions(user_id: int, start_iso: str, end_iso: str) -> list[dict]
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_view(
     request: Request,
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
     period: str = "month",
     custom_start: Optional[str] = None,
     custom_end: Optional[str] = None,
@@ -397,7 +397,7 @@ async def dashboard_view(
 
 @router.get("/dashboard/export.csv")
 async def export_csv(
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
     period: str = "month",
     custom_start: Optional[str] = None,
     custom_end: Optional[str] = None,
@@ -419,7 +419,7 @@ async def export_csv(
 
 @router.get("/dashboard/export.pdf")
 async def export_pdf(
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
     period: str = "month",
     custom_start: Optional[str] = None,
     custom_end: Optional[str] = None,

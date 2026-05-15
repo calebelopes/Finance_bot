@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ d('email_setup_title', lang) }} · Finance{% endblock %}
+
+{% block topbar %}
+<header class="bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+    <a href="/" class="flex items-center gap-2 font-semibold">
+      <span class="inline-flex w-8 h-8 items-center justify-center rounded-lg bg-brand-500 text-white">$</span>
+      <span>Finance</span>
+    </a>
+    <a href="/logout" class="text-sm font-medium text-slate-700 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
+      {{ d('nav_logout', lang) }}
+    </a>
+  </div>
+</header>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto px-4 py-12 sm:py-16">
+  <h1 class="text-3xl font-bold text-center mb-2">{{ d('email_setup_title', lang) }}</h1>
+  <p class="text-center text-slate-600 dark:text-slate-400 mb-8">{{ d('email_setup_subtitle', lang) }}</p>
+
+  <form method="post" action="/email-setup"
+        class="space-y-5 bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-6 sm:p-8 shadow-sm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="{{ next or '/app' }}">
+
+    <div class="rounded-lg bg-amber-50 dark:bg-amber-950 ring-1 ring-amber-200 dark:ring-amber-900 p-3 text-sm text-amber-800 dark:text-amber-200">
+      {{ d('email_setup_why', lang) }}
+    </div>
+
+    <div>
+      <label for="email" class="block text-sm font-medium mb-1.5">{{ d('email_label', lang) }}</label>
+      <input id="email" name="email" type="email" required maxlength="254" autofocus
+             value="{{ values.email or '' }}"
+             autocapitalize="none" autocorrect="off" spellcheck="false"
+             autocomplete="email"
+             class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-4 py-3 text-base focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
+      {% if errors.email %}<p class="text-sm text-red-600 dark:text-red-400 mt-1">{{ d(errors.email, lang) }}</p>{% endif %}
+    </div>
+
+    <button type="submit" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-3 rounded-lg text-base shadow-sm transition">
+      {{ d('email_setup_submit', lang) }}
+    </button>
+  </form>
+</div>
+{% endblock %}

@@ -18,6 +18,9 @@
   {% if request.query_params.get('password_saved') %}
     <div class="rounded-lg bg-green-50 dark:bg-green-950 ring-1 ring-green-200 dark:ring-green-900 px-4 py-3 text-sm text-green-700 dark:text-green-300">{{ d('settings_password_saved', lang) }}</div>
   {% endif %}
+  {% if request.query_params.get('email_saved') %}
+    <div class="rounded-lg bg-green-50 dark:bg-green-950 ring-1 ring-green-200 dark:ring-green-900 px-4 py-3 text-sm text-green-700 dark:text-green-300">{{ d('settings_email_saved', lang) }}</div>
+  {% endif %}
   {% if request.query_params.get('unlinked') %}
     <div class="rounded-lg bg-amber-50 dark:bg-amber-950 ring-1 ring-amber-200 dark:ring-amber-900 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">{{ d('settings_unlinked', lang) }}</div>
   {% endif %}
@@ -49,6 +52,24 @@
             <option value="{{ code }}" {% if prefs.timezone == code %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select>
+      </div>
+      <button type="submit" class="bg-brand-600 hover:bg-brand-700 text-white font-medium px-5 py-2.5 rounded-lg">{{ d('settings_save', lang) }}</button>
+    </form>
+  </section>
+
+  <section class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-5 sm:p-6">
+    <h2 class="text-lg font-semibold mb-1">{{ d('settings_email_title', lang) }}</h2>
+    <p class="text-sm text-slate-600 dark:text-slate-400 mb-4">{{ d('settings_email_caption', lang) }}</p>
+    <form method="post" action="/settings/email" class="space-y-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div>
+        <label for="settings-email" class="block text-sm font-medium mb-1.5">{{ d('email_label', lang) }}</label>
+        <input id="settings-email" name="email" type="email" required maxlength="254"
+               value="{{ email or '' }}"
+               autocapitalize="none" autocorrect="off" spellcheck="false"
+               autocomplete="email"
+               class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-3 py-2.5">
+        {% if errors.email %}<p class="text-sm text-red-600 dark:text-red-400 mt-1">{{ d(errors.email, lang) }}</p>{% endif %}
       </div>
       <button type="submit" class="bg-brand-600 hover:bg-brand-700 text-white font-medium px-5 py-2.5 rounded-lg">{{ d('settings_save', lang) }}</button>
     </form>

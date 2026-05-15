@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 from utils import categories, db
 from utils.i18n import ALL_GREETINGS, cat_name, fmt_currency
 from utils.parser import parse_smart
-from web.auth import issue_csrf_token, require_user, verify_csrf_token
+from web.auth import issue_csrf_token, require_user_with_email, verify_csrf_token
 from web.templates_setup import templates
 
 log = logging.getLogger(__name__)
@@ -105,7 +105,7 @@ def _recent_transactions(user_id: int, lang: str, currency: str, limit: int = 30
 @router.get("/app", response_class=HTMLResponse)
 async def app_index(
     request: Request,
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
 ):
     lang = user.get("lang", "pt")
     prefs = db.get_user_preferences(user["id"])
@@ -128,7 +128,7 @@ async def app_index(
 @router.post("/app/chat", response_class=HTMLResponse)
 async def chat_send(
     request: Request,
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
     text: Annotated[str, Form()] = "",
     csrf_token: Annotated[str, Form()] = "",
 ):
@@ -274,7 +274,7 @@ async def chat_send(
 async def delete_tx(
     request: Request,
     tx_id: int,
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
 ):
     """HTMX-friendly delete: returns empty 200 (HTMX swaps the row out via hx-swap='outerHTML')
     plus an out-of-band update of the KPI strip.
@@ -298,7 +298,7 @@ async def delete_tx(
 async def fix_tx_category(
     request: Request,
     tx_id: int,
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
     category: Annotated[str, Form()],
     csrf_token: Annotated[str, Form()] = "",
 ):

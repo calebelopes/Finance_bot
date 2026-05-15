@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -21,6 +22,7 @@ router = APIRouter()
 
 
 _VALID_CURRENCIES = {"BRL", "USD", "EUR", "JPY", "GBP"}
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _bot_username() -> str:
@@ -79,6 +81,31 @@ async def update_prefs(
 
     response = RedirectResponse("/settings?saved=1", status_code=303)
     return response
+
+
+@router.post("/settings/email")
+async def change_email(
+    request: Request,
+    user: Annotated[dict, Depends(require_user)],
+    email: Annotated[str, Form()] = "",
+    csrf_token: Annotated[str, Form()] = "",
+):
+    if not verify_csrf_token(csrf_token):
+        raise HTTPException(status_code=400, detail="invalid csrf token")
+
+    new_email = (email or "").strip()
+    ctx = _settings_context(request, user)
+    current_email = (db.get_user_email(user["id"]) or "").lower()
+
+    if not new_email or len(new_email) > 254 or not _EMAIL_RE.match(new_email):
+        ctx["errors"] = {"email": "signup_err_email_invalid"}
+        return templates.TemplateResponse(request, "settings/index.html", ctx, status_code=400)
+    if db.email_exists(new_email) and new_email.lower() != current_email:
+        ctx["errors"] = {"email": "signup_err_email_taken"}
+        return templates.TemplateResponse(request, "settings/index.html", ctx, status_code=400)
+
+    db.set_user_email(user["id"], new_email)
+    return RedirectResponse("/settings?email_saved=1", status_code=303)
 
 
 @router.post("/settings/password")

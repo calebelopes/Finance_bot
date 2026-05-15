@@ -182,6 +182,78 @@ async def login_submit(
     return response
 
 
+@router.get("/email-setup")
+async def email_setup_form(
+    request: Request,
+    user: Annotated[Optional[dict], Depends(get_current_user)] = None,
+    next: str = "/app",
+):
+    if user is None:
+        return RedirectResponse("/login", status_code=303)
+    if user.get("email"):
+        # Already has an email — nothing to do, send them along.
+        safe_next = next if next.startswith("/") and not next.startswith("//") else "/app"
+        return RedirectResponse(safe_next, status_code=303)
+    csrf = issue_csrf_token()
+    return templates.TemplateResponse(
+        request,
+        "auth/email_setup.html",
+        {
+            "lang": user.get("lang", "pt"),
+            "user": user,
+            "csrf_token": csrf,
+            "next": next,
+            "errors": {},
+            "values": {},
+        },
+    )
+
+
+@router.post("/email-setup")
+async def email_setup_submit(
+    request: Request,
+    email: Annotated[str, Form()],
+    user: Annotated[Optional[dict], Depends(get_current_user)] = None,
+    next: Annotated[str, Form()] = "/app",
+    csrf_token: Annotated[str, Form()] = "",
+):
+    if user is None:
+        return RedirectResponse("/login", status_code=303)
+    if not verify_csrf_token(csrf_token):
+        raise HTTPException(status_code=400, detail="invalid csrf token")
+
+    email = (email or "").strip()
+    errors: dict[str, str] = {}
+    if not email:
+        errors["email"] = "signup_err_email_invalid"
+    elif len(email) > 254 or not _EMAIL_RE.match(email):
+        errors["email"] = "signup_err_email_invalid"
+    elif db.email_exists(email) and (
+        (db.get_user_email(user["id"]) or "").lower() != email.lower()
+    ):
+        errors["email"] = "signup_err_email_taken"
+
+    if errors:
+        new_csrf = issue_csrf_token()
+        return templates.TemplateResponse(
+            request,
+            "auth/email_setup.html",
+            {
+                "lang": user.get("lang", "pt"),
+                "user": user,
+                "csrf_token": new_csrf,
+                "next": next,
+                "errors": errors,
+                "values": {"email": email},
+            },
+            status_code=400,
+        )
+
+    db.set_user_email(user["id"], email)
+    safe_next = next if next.startswith("/") and not next.startswith("//") else "/app"
+    return RedirectResponse(safe_next, status_code=303)
+
+
 @router.post("/logout")
 async def logout(
     request: Request,

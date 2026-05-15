@@ -10,7 +10,7 @@ from fastapi.responses import RedirectResponse
 from utils import categories, db
 from utils.i18n import cat_name, fmt_currency
 from utils.parser import parse_number_ptbr
-from web.auth import issue_csrf_token, require_user, verify_csrf_token
+from web.auth import issue_csrf_token, require_user_with_email, verify_csrf_token
 from web.templates_setup import templates
 
 router = APIRouter()
@@ -36,7 +36,7 @@ def _shape_recurring(row: dict, lang: str) -> dict:
 @router.get("/recurring")
 async def list_recurring(
     request: Request,
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
 ):
     lang = user.get("lang", "pt")
     raw = db.get_recurring(user["id"])
@@ -59,7 +59,7 @@ async def list_recurring(
 @router.post("/recurring")
 async def add_recurring(
     request: Request,
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
     description: Annotated[str, Form()],
     amount: Annotated[str, Form()],
     type: Annotated[str, Form()] = "expense",
@@ -100,7 +100,7 @@ async def add_recurring(
 @router.post("/recurring/{rec_id}/toggle")
 async def toggle_recurring(
     rec_id: int,
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
     csrf_token: Annotated[str, Form()] = "",
 ):
     if not verify_csrf_token(csrf_token):
@@ -113,7 +113,7 @@ async def toggle_recurring(
 @router.post("/recurring/{rec_id}/delete")
 async def delete_recurring(
     rec_id: int,
-    user: Annotated[dict, Depends(require_user)],
+    user: Annotated[dict, Depends(require_user_with_email)],
     csrf_token: Annotated[str, Form()] = "",
 ):
     if not verify_csrf_token(csrf_token):

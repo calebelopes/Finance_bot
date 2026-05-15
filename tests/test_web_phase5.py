@@ -17,7 +17,9 @@ def client_factory(tmp_path):
         from web import main as web_main  # noqa: PLC0415
 
         def _make(username="alice", password="pass1234", admin=False):
-            uid = db.create_web_user(username, password)
+            uid = db.create_web_user(
+                username, password, email=f"{username}@example.com"
+            )
             if admin:
                 db.set_admin(uid, True)
             client = TestClient(web_main.app)

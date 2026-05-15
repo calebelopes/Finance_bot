@@ -16,8 +16,8 @@ def fresh_db(tmp_path):
         db.setup_database()
         from web import main as web_main  # noqa: PLC0415
         client = TestClient(web_main.app)
-        # Auto-login a default user
-        uid = db.create_web_user("alice", "secret123")
+        # Auto-login a default user (with email so the email-required gate passes)
+        uid = db.create_web_user("alice", "secret123", email="alice@example.com")
         token = db.create_session(uid)
         client.cookies.set("finance_session", token)
         yield client, uid

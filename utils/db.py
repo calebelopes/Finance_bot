@@ -951,15 +951,45 @@ def get_user_by_session(token: str) -> dict | None:
         return None
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, username, lang, is_admin FROM users WHERE session_token = ?",
+            "SELECT id, username, lang, is_admin, email FROM users WHERE session_token = ?",
             (token,),
         ).fetchone()
     if row:
         return {
             "id": row["id"], "username": row["username"],
             "lang": row["lang"] or "pt", "is_admin": bool(row["is_admin"]),
+            "email": row["email"],
         }
     return None
+
+
+def get_user_email(user_id: int) -> str | None:
+    """Return the email column for a user, or None if not set."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT email FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+    return row["email"] if row else None
+
+
+def set_user_email(user_id: int, email: str) -> None:
+    """Persist (or replace) the email column for a user.
+
+    Caller is responsible for validation and uniqueness checks.
+    """
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET email = ? WHERE id = ?",
+            (email, user_id),
+        )
+        conn.commit()
+
+
+def clear_user_email(user_id: int) -> None:
+    """Remove the email column for a user (used by tests / admin flows)."""
+    with _connect() as conn:
+        conn.execute("UPDATE users SET email = NULL WHERE id = ?", (user_id,))
+        conn.commit()
 
 
 def clear_session(user_id: int) -> None:
