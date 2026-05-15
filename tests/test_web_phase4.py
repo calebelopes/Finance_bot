@@ -126,10 +126,10 @@ class TestChartPayload:
 
     def test_no_data_returns_no_charts_block(self, fresh_db):
         client, uid = fresh_db
-        # Query a period with no data: yesterday-only
-        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        # Query a period guaranteed to have no data (far in the past, in any tz).
+        empty_day = "2000-01-01"
         r = client.get(
-            f"/dashboard?period=custom&custom_start={yesterday}&custom_end={yesterday}",
+            f"/dashboard?period=custom&custom_start={empty_day}&custom_end={empty_day}",
         )
         assert r.status_code == 200
         # The page renders, but no chart-data block should be embedded
@@ -164,12 +164,15 @@ class TestExports:
 
 class TestPeriodHelpers:
     def test_resolve_period_today(self, fresh_db):
-        from web.period import resolve_period
+        from web.period import get_user_tz, resolve_period
         _, uid = fresh_db
         s, e = resolve_period(uid, "today")
-        today = datetime.date.today()
-        assert s == today
-        assert e == today
+        # Compare against today in the *user's* timezone (default America/Sao_Paulo),
+        # not the system's local date — otherwise the test is flaky around the
+        # São Paulo/UTC midnight boundary (e.g. CI runs at 01:00 UTC).
+        today_in_user_tz = datetime.datetime.now(get_user_tz(uid)).date()
+        assert s == today_in_user_tz
+        assert e == today_in_user_tz
 
     def test_resolve_period_month_starts_first(self, fresh_db):
         from web.period import resolve_period
