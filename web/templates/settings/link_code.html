@@ -19,9 +19,15 @@
 
     <div class="border-t border-slate-200 dark:border-slate-800 pt-6 space-y-3 text-sm text-slate-700 dark:text-slate-300">
       <p class="font-semibold">{{ d('link_telegram_step1', lang) }}</p>
-      <a href="https://t.me/{{ bot_username }}?start=link_{{ link_code }}" target="_blank" class="block text-center bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 rounded-lg">
-        {{ d('link_telegram_open_bot', lang, bot=bot_username) }}
-      </a>
+      {% if bot_username %}
+        <a href="https://t.me/{{ bot_username }}?start=link_{{ link_code }}" target="_blank" rel="noopener" class="block text-center bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 rounded-lg">
+          {{ d('link_telegram_open_bot', lang, bot=bot_username) }}
+        </a>
+      {% else %}
+        <div class="rounded-lg bg-amber-50 dark:bg-amber-950 ring-1 ring-amber-200 dark:ring-amber-900 px-4 py-3 text-amber-800 dark:text-amber-200">
+          {{ d('link_telegram_manual', lang, code=link_code) }}
+        </div>
+      {% endif %}
       <p class="font-semibold mt-4">{{ d('link_telegram_step2', lang) }}</p>
       <p>{{ d('link_telegram_step2_body', lang) }}</p>
     </div>

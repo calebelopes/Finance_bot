@@ -16,6 +16,7 @@ from web.auth import (
     require_user,
     verify_csrf_token,
 )
+from web.bot_username import get_bot_username
 from web.templates_setup import templates
 
 router = APIRouter()
@@ -26,8 +27,9 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _bot_username() -> str:
-    import os
-    return os.getenv("BOT_USERNAME", "your_finance_bot")
+    # Returns '' when we can't safely determine the real bot username; the
+    # template hides the t.me link in that case (see settings/link_code.html).
+    return get_bot_username()
 
 
 def _settings_context(request: Request, user: dict) -> dict:
