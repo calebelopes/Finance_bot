@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ d('login_title_page', lang) }} · Finance{% endblock %}
+
+{% block topbar %}
+<header class="bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+    <a href="/" class="flex items-center gap-2 font-semibold">
+      <span class="inline-flex w-8 h-8 items-center justify-center rounded-lg bg-brand-500 text-white">$</span>
+      <span>Finance</span>
+    </a>
+    <a href="/signup" class="text-sm font-medium text-slate-700 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
+      {{ d('login_no_account', lang) }} <span class="text-brand-600 dark:text-brand-400 font-semibold">{{ d('nav_signup', lang) }}</span>
+    </a>
+  </div>
+</header>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto px-4 py-12 sm:py-16">
+  <h1 class="text-3xl font-bold text-center mb-2">{{ d('login_title_page', lang) }}</h1>
+  <p class="text-center text-slate-600 dark:text-slate-400 mb-8">{{ d('login_subtitle', lang) }}</p>
+
+  <form method="post" action="/login" id="login-form" name="login"
+        class="space-y-5 bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-6 sm:p-8 shadow-sm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="{{ next or '/app' }}">
+
+    {% if error %}
+    <div class="rounded-lg bg-red-50 dark:bg-red-950 ring-1 ring-red-200 dark:ring-red-900 p-3 text-sm text-red-700 dark:text-red-300">
+      {{ d(error, lang) }}
+    </div>
+    {% endif %}
+
+    <div>
+      <label for="username" class="block text-sm font-medium mb-1.5">{{ d('login_identifier', lang) }}</label>
+      <input id="username" name="username" type="text" required autofocus
+             autocapitalize="none" autocorrect="off" spellcheck="false"
+             autocomplete="username"
+             class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-4 py-3 text-base focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
+    </div>
+
+    <div>
+      <label for="current-password" class="block text-sm font-medium mb-1.5">{{ d('signup_password', lang) }}</label>
+      <input id="current-password" name="password" type="password" required
+             autocomplete="current-password"
+             class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-4 py-3 text-base focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
+    </div>
+
+    <button type="submit" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-3 rounded-lg text-base shadow-sm transition">
+      {{ d('login_submit', lang) }}
+    </button>
+  </form>
+</div>
+{% endblock %}

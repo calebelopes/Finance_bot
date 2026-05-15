@@ -1,0 +1,13 @@
+{# Three-up KPI cards. Used both in /app and as OOB partial after delete/store. #}
+<div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-xl px-3 sm:px-4 py-3">
+  <div class="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400 font-medium">{{ d('kpi_total', lang) }}</div>
+  <div class="text-base sm:text-xl font-bold text-red-600 dark:text-red-400 mt-0.5 truncate">{{ kpi.expense_str }}</div>
+</div>
+<div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-xl px-3 sm:px-4 py-3">
+  <div class="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400 font-medium">{{ d('kpi_income', lang) }}</div>
+  <div class="text-base sm:text-xl font-bold text-green-600 dark:text-green-400 mt-0.5 truncate">{{ kpi.income_str }}</div>
+</div>
+<div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-xl px-3 sm:px-4 py-3">
+  <div class="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400 font-medium">{{ d('kpi_balance', lang) }}</div>
+  <div class="text-base sm:text-xl font-bold mt-0.5 truncate {{ 'text-slate-900 dark:text-slate-100' if kpi.balance_positive else 'text-red-600 dark:text-red-400' }}">{{ kpi.balance_str }}</div>
+</div>

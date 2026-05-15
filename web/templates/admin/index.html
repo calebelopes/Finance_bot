@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% set active = 'admin' %}
+{% block title %}{{ d('admin_title', lang) }} · Finance{% endblock %}
+
+{% block topbar %}{% include "_partials/topbar.html" %}{% endblock %}
+{% block bottomnav %}{% include "_partials/bottomnav.html" %}{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8" defer></script>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 py-4 sm:py-6 pb-24 md:pb-8 space-y-6">
+  <h1 class="text-2xl sm:text-3xl font-bold">{{ d('admin_title', lang) }}</h1>
+
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-xl p-4">
+      <div class="text-xs uppercase tracking-wide text-slate-500">{{ d('admin_kpi_users', lang) }}</div>
+      <div class="text-2xl font-bold mt-1">{{ kpi.users }}</div>
+    </div>
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-xl p-4">
+      <div class="text-xs uppercase tracking-wide text-slate-500">{{ d('admin_kpi_active7', lang) }}</div>
+      <div class="text-2xl font-bold mt-1 text-blue-600 dark:text-blue-400">{{ kpi.active_7 }}</div>
+    </div>
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-xl p-4">
+      <div class="text-xs uppercase tracking-wide text-slate-500">{{ d('admin_kpi_active30', lang) }}</div>
+      <div class="text-2xl font-bold mt-1 text-green-600 dark:text-green-400">{{ kpi.active_30 }}</div>
+    </div>
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-xl p-4">
+      <div class="text-xs uppercase tracking-wide text-slate-500">{{ d('admin_kpi_total_tx', lang) }}</div>
+      <div class="text-2xl font-bold mt-1">{{ kpi.total_tx }}</div>
+    </div>
+  </div>
+
+  {% if has_data %}
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-4">
+      <h3 class="font-semibold mb-2">{{ d('admin_chart_daily', lang) }}</h3>
+      <div id="chart-activity" class="w-full h-72"></div>
+    </div>
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-4">
+      <h3 class="font-semibold mb-2">{{ d('admin_chart_users', lang) }}</h3>
+      <div id="chart-users" class="w-full h-72"></div>
+    </div>
+  </div>
+  {% else %}
+  <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-12 text-center text-slate-500">{{ d('admin_no_data', lang) }}</div>
+  {% endif %}
+
+  <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl overflow-hidden">
+    <div class="p-4 border-b border-slate-200 dark:border-slate-800">
+      <h2 class="font-semibold">{{ d('admin_users_table', lang) }}</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 dark:bg-slate-950 text-xs uppercase text-slate-500">
+          <tr>
+            <th class="px-3 py-2 text-left">{{ d('admin_col_user', lang) }}</th>
+            <th class="px-3 py-2 text-left">{{ d('admin_col_lang', lang) }}</th>
+            <th class="px-3 py-2 text-right">{{ d('admin_col_tx', lang) }}</th>
+            <th class="px-3 py-2 text-right">{{ d('admin_col_expenses', lang) }}</th>
+            <th class="px-3 py-2 text-right">{{ d('admin_col_income', lang) }}</th>
+            <th class="px-3 py-2 text-right">{{ d('admin_col_balance', lang) }}</th>
+            <th class="px-3 py-2 text-left">{{ d('admin_col_first', lang) }}</th>
+            <th class="px-3 py-2 text-left">{{ d('admin_col_last', lang) }}</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+          {% for u in users %}
+          <tr>
+            <td class="px-3 py-2 font-medium">{{ u.username }}</td>
+            <td class="px-3 py-2">{{ u.lang }}</td>
+            <td class="px-3 py-2 text-right">{{ u.total_tx }}</td>
+            <td class="px-3 py-2 text-right text-red-600 dark:text-red-400">{{ u.expenses }}</td>
+            <td class="px-3 py-2 text-right text-green-600 dark:text-green-400">{{ u.income }}</td>
+            <td class="px-3 py-2 text-right font-medium {{ '' if u.balance_positive else 'text-red-600 dark:text-red-400' }}">{{ u.balance }}</td>
+            <td class="px-3 py-2 text-slate-500">{{ u.first_activity }}</td>
+            <td class="px-3 py-2 text-slate-500">{{ u.last_activity }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% if has_data %}
+<script id="admin-chart-data" type="application/json">
+{
+  "activity": {{ activity_chart | tojson }},
+  "users": {{ users_chart | tojson }}
+}
+</script>
+<script>
+  (function () {
+    function init() {
+      if (typeof Plotly === "undefined") { return setTimeout(init, 30); }
+      var data = JSON.parse(document.getElementById("admin-chart-data").textContent);
+      var cfg = {responsive: true, displaylogo: false};
+      Plotly.newPlot("chart-activity", data.activity.data, data.activity.layout, cfg);
+      Plotly.newPlot("chart-users", data.users.data, data.users.layout, cfg);
+    }
+    if (document.readyState !== "loading") init(); else document.addEventListener("DOMContentLoaded", init);
+  })();
+</script>
+{% endif %}
+{% endblock %}

@@ -61,7 +61,10 @@ def setup_database() -> None:  # noqa: C901
     with _connect() as conn:
         cur = conn.cursor()
 
-        # -- users (unchanged) -----------------------------------------------
+        # -- users -----------------------------------------------------------
+        # Note: INTEGER PRIMARY KEY (without AUTOINCREMENT) is used because
+        # legacy databases store Telegram user-ids in this column. The
+        # web-first migration below decouples telegram_id into its own column.
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id       INTEGER PRIMARY KEY,
@@ -78,6 +81,45 @@ def setup_database() -> None:  # noqa: C901
             cur.execute("ALTER TABLE users ADD COLUMN session_token TEXT;")
         if "is_admin" not in user_cols:
             cur.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;")
+
+        # -- Web-first migration --------------------------------------------
+        # Decouple users.id (local PK) from telegram_id. Existing rows are
+        # backfilled so telegram_id == id (preserves all FKs in transactions,
+        # recurring_transactions, etc). New web signups get auto-increment
+        # ids with telegram_id = NULL until they link via /link-telegram.
+        if "telegram_id" not in user_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN telegram_id INTEGER;")
+            cur.execute(
+                "UPDATE users SET telegram_id = id WHERE telegram_id IS NULL"
+            )
+            # users.id is INTEGER PRIMARY KEY (no AUTOINCREMENT) so SQLite
+            # auto-assigns MAX(rowid)+1 for new web signups, which is always
+            # greater than any backfilled Telegram-derived id. No sequence
+            # bump needed.
+            log.info("Migrated users table: added telegram_id column")
+        # The unique index is created idempotently every run.
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_id "
+            "ON users(telegram_id) WHERE telegram_id IS NOT NULL"
+        )
+        if "email" not in user_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN email TEXT;")
+        if "created_at" not in user_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN created_at TEXT;")
+            cur.execute(
+                "UPDATE users SET created_at = ? WHERE created_at IS NULL",
+                (_utc_now(),),
+            )
+
+        # -- telegram_link_codes (one-time codes for /link-telegram) --------
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_link_codes (
+                code        TEXT PRIMARY KEY,
+                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                expires_at  TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            )
+        """)
 
         # -- app_events / usage_events (unchanged) ---------------------------
         cur.execute("""
@@ -318,24 +360,25 @@ def setup_database() -> None:  # noqa: C901
 # ---------------------------------------------------------------------------
 
 def _ensure_user(conn: sqlite3.Connection, user_id: int, username: str | None, lang: str | None = None) -> None:
+    """Upsert a user by *local* id (already resolved). Use ensure_user_by_telegram_id for bot flow."""
     if lang:
         conn.execute(
             """
-            INSERT INTO users (id, username, lang) VALUES (?, ?, ?)
+            INSERT INTO users (id, username, lang, created_at) VALUES (?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 username = COALESCE(excluded.username, users.username),
                 lang = COALESCE(excluded.lang, users.lang)
             """,
-            (user_id, username, lang),
+            (user_id, username, lang, _utc_now()),
         )
     else:
         conn.execute(
             """
-            INSERT INTO users (id, username) VALUES (?, ?)
+            INSERT INTO users (id, username, created_at) VALUES (?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 username = COALESCE(excluded.username, users.username)
             """,
-            (user_id, username),
+            (user_id, username, _utc_now()),
         )
 
 
@@ -658,6 +701,35 @@ def authenticate_user(username: str, password: str) -> dict | None:
     return None
 
 
+def authenticate_by_identifier(identifier: str, password: str) -> dict | None:
+    """Verify password against a user looked up by either username or email.
+
+    Used by the web login form so users can log in with whichever credential
+    they remember.
+    """
+    identifier = (identifier or "").strip()
+    if not identifier or not password:
+        return None
+    looks_like_email = "@" in identifier
+    sql = (
+        "SELECT id, username, password_hash, lang, is_admin FROM users "
+        "WHERE LOWER(email) = LOWER(?)"
+        if looks_like_email
+        else "SELECT id, username, password_hash, lang, is_admin FROM users "
+             "WHERE LOWER(username) = LOWER(?)"
+    )
+    with _connect() as conn:
+        row = conn.execute(sql, (identifier,)).fetchone()
+    if row is None or row["password_hash"] is None:
+        return None
+    if _verify_password_hash(password, row["password_hash"]):
+        return {
+            "id": row["id"], "username": row["username"],
+            "lang": row["lang"] or "pt", "is_admin": bool(row["is_admin"]),
+        }
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Language
 # ---------------------------------------------------------------------------
@@ -678,10 +750,186 @@ def set_lang(user_id: int, lang: str) -> None:
 
 
 def ensure_user_with_lang(user_id: int, username: str | None, lang: str | None = None) -> None:
-    """Public wrapper: upsert user and optionally set initial language."""
+    """Public wrapper: upsert user and optionally set initial language. user_id is the *local* PK."""
     with _connect() as conn:
         _ensure_user(conn, user_id, username, lang)
         conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Telegram identity resolution (web-first migration)
+# ---------------------------------------------------------------------------
+
+def get_user_by_telegram_id(telegram_id: int) -> dict | None:
+    """Look up a user row by their Telegram id. Returns user dict or None."""
+    with _connect() as conn:
+        row = conn.execute(
+            """SELECT id, username, lang, is_admin, telegram_id, email
+               FROM users WHERE telegram_id = ?""",
+            (telegram_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "lang": row["lang"] or "pt",
+        "is_admin": bool(row["is_admin"]),
+        "telegram_id": row["telegram_id"],
+        "email": row["email"],
+    }
+
+
+def ensure_user_by_telegram_id(
+    telegram_id: int, username: str | None, lang: str | None = None,
+) -> int:
+    """Find-or-create a user identified by Telegram id. Returns the *local* user id.
+
+    - If a row exists with this telegram_id: refresh username/lang if newer values supplied.
+    - If not: insert a new row with telegram_id set; SQLite assigns the next local id.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)
+        ).fetchone()
+        if row:
+            local_id = row["id"]
+            if username or lang:
+                conn.execute(
+                    """UPDATE users SET
+                         username = COALESCE(?, username),
+                         lang = COALESCE(?, lang)
+                       WHERE id = ?""",
+                    (username, lang, local_id),
+                )
+                conn.commit()
+            return local_id
+
+        cur = conn.execute(
+            """INSERT INTO users (telegram_id, username, lang, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (telegram_id, username, lang or "pt", _utc_now()),
+        )
+        local_id = cur.lastrowid
+        conn.commit()
+    return local_id
+
+
+def link_telegram_to_user(local_user_id: int, telegram_id: int) -> bool:
+    """Attach a telegram_id to an existing local user. Returns False if telegram_id is taken."""
+    with _connect() as conn:
+        existing = conn.execute(
+            "SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)
+        ).fetchone()
+        if existing and existing["id"] != local_user_id:
+            return False
+        conn.execute(
+            "UPDATE users SET telegram_id = ? WHERE id = ?",
+            (telegram_id, local_user_id),
+        )
+        conn.commit()
+    return True
+
+
+def unlink_telegram(local_user_id: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET telegram_id = NULL WHERE id = ?", (local_user_id,)
+        )
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Web signup
+# ---------------------------------------------------------------------------
+
+def username_exists(username: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE LOWER(username) = LOWER(?)", (username,)
+        ).fetchone()
+    return row is not None
+
+
+def email_exists(email: str) -> bool:
+    if not email:
+        return False
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE LOWER(email) = LOWER(?)", (email,)
+        ).fetchone()
+    return row is not None
+
+
+def create_web_user(
+    username: str,
+    password: str,
+    lang: str = "pt",
+    currency: str = "BRL",
+    timezone: str = "America/Sao_Paulo",
+    email: str | None = None,
+) -> int | None:
+    """Create a new user via web signup (no Telegram linked). Returns local user id, or None on conflict."""
+    if not username or not password:
+        return None
+    if username_exists(username):
+        return None
+    hashed = _hash_password(password)
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO users (username, password_hash, lang, email, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (username, hashed, lang, email, _utc_now()),
+        )
+        local_id = cur.lastrowid
+        conn.execute(
+            """INSERT INTO user_preferences (user_id, currency_default, timezone)
+               VALUES (?, ?, ?)""",
+            (local_id, currency, timezone),
+        )
+        conn.commit()
+    return local_id
+
+
+# ---------------------------------------------------------------------------
+# Telegram link codes (one-time codes for /link-telegram flow)
+# ---------------------------------------------------------------------------
+
+def create_telegram_link_code(local_user_id: int, ttl_minutes: int = 10) -> str:
+    """Generate a 6-digit code that lets a Telegram user attach to *local_user_id*."""
+    code = f"{secrets.randbelow(900000) + 100000:06d}"
+    expires = (
+        datetime.datetime.now(datetime.UTC)
+        + datetime.timedelta(minutes=ttl_minutes)
+    ).replace(microsecond=0).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM telegram_link_codes WHERE user_id = ?", (local_user_id,)
+        )
+        conn.execute(
+            """INSERT INTO telegram_link_codes (code, user_id, expires_at, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (code, local_user_id, expires, _utc_now()),
+        )
+        conn.commit()
+    return code
+
+
+def consume_telegram_link_code(code: str) -> int | None:
+    """Validate and consume a code. Returns the local user id it was bound to, or None."""
+    now = _utc_now()
+    with _connect() as conn:
+        row = conn.execute(
+            """SELECT user_id FROM telegram_link_codes
+               WHERE code = ? AND expires_at > ?""",
+            (code, now),
+        ).fetchone()
+        if not row:
+            return None
+        user_id = row["user_id"]
+        conn.execute("DELETE FROM telegram_link_codes WHERE code = ?", (code,))
+        conn.commit()
+    return user_id
 
 
 # ---------------------------------------------------------------------------

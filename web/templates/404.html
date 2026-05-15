@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}404 · Finance{% endblock %}
+{% block content %}
+<div class="max-w-md mx-auto px-4 py-24 text-center">
+  <p class="text-6xl font-bold text-slate-400 dark:text-slate-600">404</p>
+  <h1 class="mt-4 text-2xl font-bold">{{ d('error_404_title', lang) }}</h1>
+  <p class="mt-2 text-slate-600 dark:text-slate-400">{{ d('error_404_body', lang) }}</p>
+  <a href="/" class="mt-6 inline-flex bg-brand-600 hover:bg-brand-700 text-white font-medium px-5 py-2.5 rounded-lg">{{ d('error_back_home', lang) }}</a>
+</div>
+{% endblock %}

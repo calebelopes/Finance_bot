@@ -1,0 +1,30 @@
+/* App-specific tweaks layered on top of Tailwind CDN. */
+
+html { -webkit-text-size-adjust: 100%; }
+
+/* Avoid iOS zoom-in when focusing inputs on iPhone */
+input, select, textarea { font-size: 16px; }
+
+@media (min-width: 640px) {
+  input, select, textarea { font-size: inherit; }
+}
+
+/* Smooth chat-list autoscroll */
+.chat-stream { scroll-behavior: smooth; }
+
+/* HTMX swap fade */
+.htmx-swapping { opacity: 0.4; transition: opacity 0.15s ease-out; }
+.htmx-added    { animation: fadeIn 0.25s ease-out; }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Honeypot field — visually hidden but parseable by accessibility tools */
+input[name="honeypot"] {
+  position: absolute !important;
+  left: -9999px !important;
+  height: 0 !important;
+  width: 0 !important;
+  pointer-events: none !important;
+}

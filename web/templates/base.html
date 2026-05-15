@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="{{ lang or 'pt' }}" class="h-full bg-slate-50 dark:bg-slate-950">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <title>{% block title %}{{ d('page_title', lang) if lang else 'Finance' }}{% endblock %}</title>
+
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem("finance.theme");
+        var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        if (stored === "dark" || (!stored && prefersDark)) {
+          document.documentElement.classList.add("dark");
+          document.documentElement.style.backgroundColor = "#020617";
+        } else {
+          document.documentElement.style.backgroundColor = "#f8fafc";
+        }
+      } catch (e) { /* localStorage unavailable */ }
+    })();
+  </script>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50:  '#ecfdf5', 100: '#d1fae5', 200: '#a7f3d0',
+              500: '#10b981', 600: '#059669', 700: '#047857', 900: '#064e3b',
+            },
+          },
+          fontFamily: {
+            sans: ['system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+          },
+        },
+      },
+    };
+  </script>
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+  <link rel="stylesheet" href="/static/css/app.css">
+
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="h-full bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100 flex flex-col">
+
+  {% block topbar %}{% endblock %}
+
+  <main class="flex-1 w-full">
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block bottomnav %}{% endblock %}
+
+  <script src="/static/js/app.js" defer></script>
+  {% block body_extra %}{% endblock %}
+</body>
+</html>

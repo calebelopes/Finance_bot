@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ d('signup_title', lang) }} · Finance{% endblock %}
+
+{% block topbar %}
+<header class="bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+    <a href="/" class="flex items-center gap-2 font-semibold">
+      <span class="inline-flex w-8 h-8 items-center justify-center rounded-lg bg-brand-500 text-white">$</span>
+      <span>Finance</span>
+    </a>
+    <a href="/login" class="text-sm font-medium text-slate-700 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
+      {{ d('signup_have_account', lang) }} <span class="text-brand-600 dark:text-brand-400 font-semibold">{{ d('nav_login', lang) }}</span>
+    </a>
+  </div>
+</header>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto px-4 py-12 sm:py-16">
+  <h1 class="text-3xl font-bold text-center mb-2">{{ d('signup_title', lang) }}</h1>
+  <p class="text-center text-slate-600 dark:text-slate-400 mb-8">{{ d('signup_subtitle', lang) }}</p>
+
+  <form method="post" action="/signup" id="signup-form" name="signup"
+        class="space-y-5 bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-6 sm:p-8 shadow-sm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="text" name="honeypot" class="hidden" tabindex="-1" autocomplete="off" aria-hidden="true">
+
+    <div>
+      <label for="username" class="block text-sm font-medium mb-1.5">{{ d('signup_username', lang) }}</label>
+      <input id="username" name="username" type="text" required minlength="3" maxlength="32"
+             value="{{ values.username or '' }}"
+             autocapitalize="none" autocorrect="off" spellcheck="false"
+             autocomplete="username"
+             class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-4 py-3 text-base focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
+      {% if errors.username %}<p class="text-sm text-red-600 dark:text-red-400 mt-1">{{ d(errors.username, lang) }}</p>{% endif %}
+    </div>
+
+    <div>
+      <label for="email" class="block text-sm font-medium mb-1.5">{{ d('signup_email', lang) }}</label>
+      <input id="email" name="email" type="email" maxlength="254"
+             value="{{ values.email or '' }}"
+             autocapitalize="none" autocorrect="off" spellcheck="false"
+             autocomplete="email"
+             class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-4 py-3 text-base focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
+      <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">{{ d('signup_email_hint', lang) }}</p>
+      {% if errors.email %}<p class="text-sm text-red-600 dark:text-red-400 mt-1">{{ d(errors.email, lang) }}</p>{% endif %}
+    </div>
+
+    <div>
+      <label for="new-password" class="block text-sm font-medium mb-1.5">{{ d('signup_password', lang) }}</label>
+      <input id="new-password" name="password" type="password" required minlength="6"
+             autocomplete="new-password"
+             class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-4 py-3 text-base focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
+      {% if errors.password %}<p class="text-sm text-red-600 dark:text-red-400 mt-1">{{ d(errors.password, lang) }}</p>{% endif %}
+    </div>
+
+    <div>
+      <label for="password_confirm" class="block text-sm font-medium mb-1.5">{{ d('signup_password_confirm', lang) }}</label>
+      <input id="password_confirm" name="password_confirm" type="password" required
+             autocomplete="new-password"
+             class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-4 py-3 text-base focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
+      {% if errors.password_confirm %}<p class="text-sm text-red-600 dark:text-red-400 mt-1">{{ d(errors.password_confirm, lang) }}</p>{% endif %}
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label for="lang" class="block text-sm font-medium mb-1.5">{{ d('signup_lang', lang) }}</label>
+        <select id="lang" name="lang" class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-3 py-3 text-base">
+          {% for code, label in LANG_LABELS.items() %}
+            <option value="{{ code }}" {% if values.lang == code or (not values.lang and lang == code) %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="currency" class="block text-sm font-medium mb-1.5">{{ d('signup_currency', lang) }}</label>
+        <select id="currency" name="currency" class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-3 py-3 text-base">
+          {% for code, label in CURRENCY_LABELS.items() %}
+            <option value="{{ code }}" {% if values.currency == code or (not values.currency and code == 'BRL') %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <button type="submit" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-3 rounded-lg text-base shadow-sm transition">
+      {{ d('signup_submit', lang) }}
+    </button>
+
+    <p class="text-xs text-center text-slate-500 dark:text-slate-400">
+      {{ d('signup_telegram_hint', lang) }}
+    </p>
+  </form>
+</div>
+{% endblock %}

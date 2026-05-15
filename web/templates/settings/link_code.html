@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% set active = 'settings' %}
+{% block title %}{{ d('link_telegram_title', lang) }} · Finance{% endblock %}
+
+{% block topbar %}{% include "_partials/topbar.html" %}{% endblock %}
+{% block bottomnav %}{% include "_partials/bottomnav.html" %}{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto px-4 py-10">
+  <h1 class="text-2xl font-bold text-center mb-2">{{ d('link_telegram_title', lang) }}</h1>
+  <p class="text-center text-slate-600 dark:text-slate-400 mb-8">{{ d('link_telegram_subtitle', lang) }}</p>
+
+  <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-6 sm:p-8 space-y-6">
+    <div class="text-center">
+      <div class="text-sm text-slate-500 mb-2">{{ d('link_telegram_code_label', lang) }}</div>
+      <div class="font-mono text-5xl font-bold tracking-widest select-all">{{ link_code }}</div>
+      <div class="text-xs text-slate-500 mt-2">{{ d('link_telegram_expires', lang) }}</div>
+    </div>
+
+    <div class="border-t border-slate-200 dark:border-slate-800 pt-6 space-y-3 text-sm text-slate-700 dark:text-slate-300">
+      <p class="font-semibold">{{ d('link_telegram_step1', lang) }}</p>
+      <a href="https://t.me/{{ bot_username }}?start=link_{{ link_code }}" target="_blank" class="block text-center bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 rounded-lg">
+        {{ d('link_telegram_open_bot', lang, bot=bot_username) }}
+      </a>
+      <p class="font-semibold mt-4">{{ d('link_telegram_step2', lang) }}</p>
+      <p>{{ d('link_telegram_step2_body', lang) }}</p>
+    </div>
+
+    <a href="/settings" class="block text-center text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">{{ d('link_telegram_back', lang) }}</a>
+  </div>
+</div>
+{% endblock %}

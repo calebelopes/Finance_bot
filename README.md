@@ -1,47 +1,49 @@
-# Finance Telegram Bot
+# Finance — Web app + Telegram bot
 
-Bot do Telegram para registrar e controlar gastos pessoais.
-Envie mensagens pelo Telegram e tenha seus gastos organizados com categorização automática, consultas por período e resumo por categoria.
+App web mobile-first para registrar e controlar gastos pessoais, com bot do Telegram opcional. Crie sua conta direto no site, registre gastos por linguagem natural ("jantar 30 usd"), acompanhe métricas e gráficos no dashboard, e — se quiser — vincule sua conta ao bot do Telegram para registrar pelo celular.
+
+```mermaid
+flowchart LR
+  subgraph Web [Web app — FastAPI + Jinja2 + HTMX + Tailwind]
+    L[Landing /]
+    S[/signup, /login/]
+    A[/app  chat e KPIs/]
+    D[/dashboard  6 gráficos + exports/]
+    R[/recurring  regras periódicas/]
+    AD[/admin  uso da plataforma/]
+    SE[/settings  email, idioma, senha, Telegram/]
+  end
+  B[Telegram bot opcional]
+  DB[(SQLite\nusers.id auto, telegram_id nullable)]
+  L --> S --> A
+  A --> D & R & SE
+  AD -.- DB
+  Web --> DB
+  B --> DB
+  SE -.->|/link-telegram| B
+```
 
 ---
 
 ## Funcionalidades
 
-- **Registro rápido** de gastos via mensagem de texto
-- **Categorização automática** (Alimentação, Refeição, Transporte, etc.)
-- **Consulta de gastos** por período (`/today`, `/week`, `/month`)
-- **Resumo por categoria** (`/summary`)
-- **Edição e exclusão** de registros
-- **Formato pt-BR** (vírgula decimal: `20,50` / milhares: `1.234,56`)
-- **Controle de acesso** por ID do Telegram
+### Web app
+- **Landing pública** + signup com usuário, e-mail (obrigatório) e senha
+- **Login por usuário OU e-mail** (case-insensitive), com sessão por cookie HttpOnly e proteção CSRF
+- **Chat in-site** que entende linguagem natural (`"jantar 30 usd ontem"`, `"recebi 5000 salario"`) e categoriza automaticamente
+- **Dashboard completo**: KPIs, 6 gráficos (timeline, donut por categoria, barras, acumulado, comparison, histórico mensal), tabela top expenses, log com busca, export CSV/PDF
+- **Recorrentes**: criar/pausar/remover regras (aluguel, salário, assinaturas)
+- **Admin panel**: KPIs da plataforma + gráficos de atividade
+- **Multi-idioma**: pt-BR, en, ja
+- **Multi-moeda** (BRL, USD, EUR, JPY, GBP) com conversão por cotação
+- **Mobile-first**: bottom nav em telas pequenas, dark mode com fallback no `prefers-color-scheme`
+
+### Bot do Telegram (opcional)
+Mesmos comandos de antes (`/today`, `/week`, `/month`, `/summary`, `/delete`, `/edit`, `/recurring`, etc.) — agora atrelados ao mesmo banco do web app. Para vincular sua conta web ao bot, vá em **Settings → Telegram** e siga o deep link.
 
 ---
 
-## Comandos
-
-| Comando | Descrição |
-|---------|-----------|
-| `/start` | Mensagem de boas-vindas |
-| `/help` | Lista de comandos |
-| `/today` | Gastos de hoje |
-| `/week` | Gastos da semana |
-| `/month` | Gastos do mês |
-| `/summary` | Resumo por categoria (mês atual) |
-| `/delete <id>` | Apagar um gasto |
-| `/edit <id> <valor>` | Editar valor de um gasto |
-
-Para registrar um gasto, envie uma mensagem com a descrição e o valor:
-
-```
-jantar 20,50
-mercado 135,90
-cafe da manha 12
-uber 25
-```
-
----
-
-## Setup
+## Setup local
 
 ### 1. Clone e instale dependências
 
@@ -49,27 +51,45 @@ uber 25
 git clone <repo-url>
 cd Finance_bot
 python -m venv .venv
-source .venv/bin/activate        # Linux / macOS
-# .\.venv\Scripts\Activate.ps1   # Windows PowerShell
+source .venv/bin/activate           # Linux / macOS
+# .\.venv\Scripts\Activate.ps1     # Windows PowerShell
+
+# Para rodar a web:
+pip install -r web/requirements.txt
+# Para rodar o bot do Telegram (opcional):
 pip install -r requirements.txt
 ```
 
-### 2. Configure variáveis de ambiente
-
-Copie o exemplo e edite:
+### 2. Configure `.env`
 
 ```bash
 cp .env.example .env
-# Edite .env com seu token do BotFather
+# Edite com seus valores
 ```
 
-Ou defina diretamente no terminal:
+Variáveis principais:
+
+| Variável | Onde é usada | Obrigatório |
+|----------|--------------|:-----------:|
+| `TOKEN` | Bot do Telegram (token do @BotFather) | Só pro bot |
+| `BOT_USERNAME` | Web — gera o deep link `t.me/<bot>?start=link_CODE` no Settings | Recomendado |
+| `WEB_PORT` | Porta do uvicorn (default 8000) | Não |
+| `DASHBOARD_URL` | URL pública do web app, mostrada nas mensagens do bot | Não |
+| `ALLOWED_USERS` | Lista de Telegram IDs autorizados a usar o bot | Não |
+| `BOT_OWNER` | Telegram ID do dono (ganha acesso ao `/admin`) | Não |
+| `TIMEZONE` | Timezone padrão para novos usuários | Não |
+
+### 3. Rode o web app
 
 ```bash
-export TOKEN="seu_token_do_botfather"
+python -m uvicorn web.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### 3. Execute
+Abra http://localhost:8000 no navegador, crie sua conta, e pronto. O e-mail é obrigatório no primeiro acesso (qualquer conta sem e-mail é redirecionada para `/email-setup`).
+
+### 4. (Opcional) Rode o bot do Telegram
+
+Em outro terminal:
 
 ```bash
 python -m bot.main
@@ -77,21 +97,37 @@ python -m bot.main
 
 ---
 
-## Variáveis de Ambiente
+## Docker / docker-compose
 
-| Variável | Obrigatório | Descrição |
-|----------|:-----------:|-----------|
-| `TOKEN` | Sim | Token do bot (@BotFather) |
-| `ALLOWED_USERS` | Não | IDs de usuários permitidos (separados por vírgula) |
-| `TIMEZONE` | Não | Fuso horário (padrão: `America/Sao_Paulo`) |
-| `USE_SYSTEM_CA` | Não | `1` para usar certificados do sistema (redes corporativas) |
-| `TELEGRAM_CA_BUNDLE` | Não | Caminho para arquivo PEM de CA customizado |
+```bash
+docker compose up -d
+```
+
+Sobe dois serviços:
+- **`web`** — FastAPI/uvicorn na porta `8000`
+- **`bot`** — bot do Telegram (precisa do `TOKEN` no `.env`)
+
+Ambos compartilham `./data/data.db` via volume.
+
+Para subir só o web:
+
+```bash
+docker compose up -d web
+```
 
 ---
 
-## Categorias Automáticas
+## Cadastro e fluxo de e-mail
 
-O bot categoriza gastos automaticamente com base na descrição:
+1. Usuário acessa `/` → clica **Sign up**
+2. Preenche usuário + e-mail (opcional no form, mas obrigatório a partir do primeiro acesso à área logada) + senha
+3. Logged-in: pode trocar e-mail / senha / idioma / moeda / timezone em **Settings**
+4. Para vincular Telegram: **Settings → Link Telegram** → site gera código de 6 dígitos válido por 10 min → no bot envia `/start link_CODE`
+5. Usuário pode logar com **usuário** ou **e-mail** (case-insensitive)
+
+---
+
+## Categorização automática
 
 | Categoria | Exemplos de palavras-chave |
 |-----------|---------------------------|
@@ -103,104 +139,92 @@ O bot categoriza gastos automaticamente com base na descrição:
 | Educação | curso, livro, escola, faculdade |
 | Lazer | cinema, viagem, hotel, bar, netflix |
 | Vestuário | roupa, sapato, camisa, calça |
+| Salário/Renda | salário, freelance, dividendo, recebido |
 | Outros | (padrão quando não há correspondência) |
 
----
-
-## Banco de Dados (SQLite)
-
-Arquivo: `data/data.db` (criado automaticamente)
-
-### Tabelas
-
-- **`users`** — id (Telegram), username, password_hash, lang, session_token, is_admin
-- **`transactions`** — user_id, description, amount_original, currency_code, category, category_id, type, source, status, created_at (UTC)
-- **`categories`** — name_key, icon, type (expense/income), is_system
-- **`category_aliases`** — category_id, alias, lang
-- **`currencies`** — code (BRL/USD/EUR/JPY/GBP), name, symbol
-- **`user_preferences`** — user_id, currency_default, timezone, confirmation_mode
-- **`recurring_transactions`** — user_id, description, amount, currency_code, category_id, frequency, day_of_month
-- **`recurring_logs`** — recurring_id, transaction_id, executed_at
-- **`exchange_rates`** — from_currency, to_currency, rate, fetched_at
-- **`usage_events`** — user_id, event_type, created_at
-- **`app_events`** — event_type, created_at
-
-Migrations are applied automatically in `setup_database()`. Existing `actions` tables are renamed to `transactions` with column renames handled transparently.
+NLP entende variações de moeda (`"30 dolares"`, `"5000 ienes"`), datas relativas (`"ontem"`, `"semana passada"`) e marca tipo (`income` vs `expense`) automaticamente.
 
 ---
 
-## Docker
+## Banco de dados (SQLite)
 
-```bash
-docker build -t finance-bot .
-docker run -e TOKEN="seu_token" finance-bot
+Arquivo: `data/data.db` (criado e migrado automaticamente em `setup_database()`).
+
+Principais tabelas:
+
+- **`users`** — `id` (auto), `username`, `email`, `password_hash`, `telegram_id` (nullable, unique), `lang`, `is_admin`, `session_token`, `created_at`
+- **`transactions`** — `user_id`, `description`, `amount`, `amount_original`, `currency_code`, `category`, `category_id`, `type` (expense/income), `source` (web/telegram), `status`, `created_at`
+- **`user_preferences`** — `user_id`, `currency_default`, `timezone`, `confirmation_mode`
+- **`recurring_transactions`**, **`recurring_logs`** — regras periódicas
+- **`telegram_link_codes`** — códigos one-time usados em Settings → Link Telegram
+- **`exchange_rates`** — cotações para conversão multi-moeda
+- **`categories`**, **`category_aliases`** — taxonomia + sinônimos por idioma
+- **`usage_events`**, **`app_events`** — telemetria interna
+
+Migrações são aplicadas automaticamente: a coluna `telegram_id` foi adicionada para desacoplar o `users.id` do ID do Telegram (o backfill copia o `id` antigo para `telegram_id` e libera novos IDs auto-incrementados para signups web).
+
+---
+
+## Estrutura do projeto
+
 ```
-
-Com persistência de dados:
-
-```bash
-docker run -e TOKEN="seu_token" -v ./data:/app/data finance-bot
+Finance_bot/
+├── bot/                       # Telegram bot
+│   └── main.py
+├── web/                       # FastAPI app (mobile-first)
+│   ├── main.py
+│   ├── auth.py                # session cookie + CSRF + email gate
+│   ├── period.py              # date range helpers
+│   ├── routes/
+│   │   ├── landing.py
+│   │   ├── auth.py            # /signup /login /logout /email-setup
+│   │   ├── app_view.py        # /app (chat, KPI strip, lista recente)
+│   │   ├── dashboard.py       # /dashboard (Plotly.js + exports)
+│   │   ├── recurring.py
+│   │   ├── admin.py
+│   │   └── settings.py
+│   ├── templates/             # Jinja2 (Tailwind via CDN, HTMX, Plotly.js)
+│   ├── static/
+│   ├── Dockerfile
+│   └── requirements.txt
+├── utils/
+│   ├── auth.py                # resolve_telegram_user (telegram-agnóstico)
+│   ├── db.py                  # SQLite + migrations + CRUD
+│   ├── parser.py              # parse_smart (linguagem natural)
+│   ├── categories.py          # infer_category_with_confidence
+│   ├── i18n.py                # pt/en/ja
+│   └── export.py              # CSV / PDF
+├── tests/                     # 341 tests
+├── data/                      # SQLite (volume)
+├── docker-compose.yml
+├── Dockerfile                 # bot
+├── requirements.txt           # bot
+└── README.md
 ```
 
 ---
 
 ## Desenvolvimento
 
-### Instalar dependências de desenvolvimento
-
 ```bash
+# Dependências de dev (ruff, pytest, etc.)
 pip install -r requirements-dev.txt
-```
 
-### Executar testes
-
-```bash
+# Testes
 pytest tests/ -v
-```
 
-### Linting
-
-```bash
+# Lint
 ruff check .
 ```
 
 ---
 
-## Estrutura do Projeto
+## CI/CD
 
-```
-Finance_bot/
-├── bot/
-│   ├── __init__.py
-│   └── main.py              # Handlers e polling
-├── utils/
-│   ├── __init__.py
-│   ├── categories.py         # Categorização automática
-│   ├── db.py                 # SQLite (setup, CRUD, queries)
-│   ├── messages.py           # Textos do bot (pt-BR)
-│   └── parser.py             # Parsing de números e ações
-├── tests/
-│   ├── test_categories.py
-│   ├── test_db.py
-│   └── test_parser.py
-├── data/
-│   └── .gitkeep
-├── .env.example
-├── .github/workflows/ci.yml
-├── .gitignore
-├── Dockerfile
-├── pyproject.toml
-├── README.md
-├── requirements.txt
-└── requirements-dev.txt
-```
+GitHub Actions (`.github/workflows/ci.yml`):
 
----
+1. **Lint + test** em cada push e PR
+2. **Bump de versão + tag** ao mergear em `master`
+3. **Deploy via SSH** para o servidor Oracle Cloud (`docker compose build` + `up`)
 
-## Deploy / 24×7
-
-O bot roda em **polling**, então precisa de um processo sempre ativo.
-
-- **VM** (Oracle Free Tier, AWS EC2, etc.) — mais controle, fácil manter 24/7
-- **PaaS** (Render, Fly.io, Railway) — deploy mais simples, free tier pode ter limitações
-- **Docker** — ideal para qualquer ambiente com containerização
+Backup automático de `data/data.db` antes de cada deploy.

@@ -1,0 +1,23 @@
+<header class="bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+    <a href="/app" class="flex items-center gap-2 font-semibold">
+      <span class="inline-flex w-8 h-8 items-center justify-center rounded-lg bg-brand-500 text-white">$</span>
+      <span class="hidden sm:inline">Finance</span>
+    </a>
+    <nav class="hidden md:flex items-center gap-1">
+      <a href="/app" class="px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-100 dark:hover:bg-slate-900 {{ 'bg-slate-100 dark:bg-slate-900' if active == 'app' else '' }}">{{ d('nav_app', lang) }}</a>
+      <a href="/dashboard" class="px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-100 dark:hover:bg-slate-900 {{ 'bg-slate-100 dark:bg-slate-900' if active == 'dashboard' else '' }}">{{ d('nav_dashboard', lang) }}</a>
+      <a href="/recurring" class="px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-100 dark:hover:bg-slate-900 {{ 'bg-slate-100 dark:bg-slate-900' if active == 'recurring' else '' }}">{{ d('nav_recurring', lang) }}</a>
+      <a href="/settings" class="px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-100 dark:hover:bg-slate-900 {{ 'bg-slate-100 dark:bg-slate-900' if active == 'settings' else '' }}">{{ d('nav_settings', lang) }}</a>
+      {% if user and user.get('is_admin') %}
+        <a href="/admin" class="px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-100 dark:hover:bg-slate-900 {{ 'bg-slate-100 dark:bg-slate-900' if active == 'admin' else '' }}">{{ d('nav_admin', lang) }}</a>
+      {% endif %}
+    </nav>
+    <div class="flex items-center gap-2">
+      <span class="hidden sm:inline text-sm text-slate-500 dark:text-slate-400">{{ user.username }}</span>
+      <form method="post" action="/logout" class="m-0">
+        <button type="submit" class="text-sm font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900">{{ d('nav_logout', lang) }}</button>
+      </form>
+    </div>
+  </div>
+</header>

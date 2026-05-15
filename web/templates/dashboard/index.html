@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+{% set active = 'dashboard' %}
+{% block title %}{{ d('page_title_dashboard', lang) }} · Finance{% endblock %}
+
+{% block topbar %}{% include "_partials/topbar.html" %}{% endblock %}
+{% block bottomnav %}{% include "_partials/bottomnav.html" %}{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8" defer></script>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 py-4 sm:py-6 pb-24 md:pb-8 space-y-6">
+
+  <header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+    <div>
+      <h1 class="text-2xl sm:text-3xl font-bold">{{ d('title', lang, period=start_date.strftime('%d/%m') ~ ' — ' ~ end_date.strftime('%d/%m')) }}</h1>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <a href="/dashboard/export.csv?period={{ period }}{% if period == 'custom' %}&custom_start={{ custom_start }}&custom_end={{ custom_end }}{% endif %}"
+         class="inline-flex items-center bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-medium px-3 py-2 rounded-lg">
+        {{ d('export_csv', lang) }}
+      </a>
+      <a href="/dashboard/export.pdf?period={{ period }}{% if period == 'custom' %}&custom_start={{ custom_start }}&custom_end={{ custom_end }}{% endif %}"
+         class="inline-flex items-center bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-medium px-3 py-2 rounded-lg">
+        {{ d('export_pdf', lang) }}
+      </a>
+    </div>
+  </header>
+
+  {# Period & filter bar #}
+  <form method="get" action="/dashboard" class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-4 space-y-3">
+    <div class="flex flex-wrap gap-2">
+      {% set periods = [('today','quick_today'),('week','quick_week'),('month','quick_month'),('last_month','quick_last_month'),('3months','quick_3months'),('6months','quick_6months'),('year','quick_year'),('custom','quick_custom')] %}
+      {% for code, label_key in periods %}
+        <button type="submit" name="period" value="{{ code }}"
+                class="text-xs sm:text-sm font-medium px-3 py-1.5 rounded-full ring-1 transition
+                       {{ 'bg-brand-600 text-white ring-brand-600' if period == code else 'bg-slate-100 dark:bg-slate-800 ring-slate-200 dark:ring-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700' }}">
+          {{ d(label_key, lang) }}
+        </button>
+      {% endfor %}
+    </div>
+
+    <div class="flex flex-wrap gap-3 items-end">
+      <div class="flex gap-1 items-center">
+        <label class="text-xs text-slate-500 dark:text-slate-400">{{ d('sidebar_type', lang) }}</label>
+        <select name="type" onchange="this.form.submit()" class="rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-2 py-1 text-sm">
+          <option value="all" {% if type_filter == 'all' %}selected{% endif %}>{{ d('type_all', lang) }}</option>
+          <option value="expense" {% if type_filter == 'expense' %}selected{% endif %}>{{ d('type_expense', lang) }}</option>
+          <option value="income" {% if type_filter == 'income' %}selected{% endif %}>{{ d('type_income', lang) }}</option>
+        </select>
+      </div>
+
+      {% if period == 'custom' %}
+        <div class="flex gap-2 items-center">
+          <input type="date" name="custom_start" value="{{ custom_start }}" class="rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-2 py-1 text-sm">
+          <span class="text-slate-400">—</span>
+          <input type="date" name="custom_end" value="{{ custom_end }}" class="rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-2 py-1 text-sm">
+          <button type="submit" name="period" value="custom" class="bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium px-3 py-1.5 rounded-lg">{{ d('settings_save', lang) }}</button>
+        </div>
+      {% endif %}
+    </div>
+  </form>
+
+  {% if not has_data %}
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-12 text-center text-slate-500 dark:text-slate-400">
+      {{ d('no_data', lang) }}
+    </div>
+  {% else %}
+
+  {# KPI cards #}
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-xl p-4">
+      <div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-medium">{{ d('kpi_total', lang) }}</div>
+      <div class="text-xl sm:text-2xl font-bold text-red-600 dark:text-red-400 mt-1">{{ kpi.expense }}</div>
+      {% if kpi.delta_expense %}<div class="text-xs text-slate-500 mt-1">Δ {{ kpi.delta_expense }}</div>{% endif %}
+    </div>
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-xl p-4">
+      <div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-medium">{{ d('kpi_income', lang) }}</div>
+      <div class="text-xl sm:text-2xl font-bold text-green-600 dark:text-green-400 mt-1">{{ kpi.income }}</div>
+      {% if kpi.delta_income %}<div class="text-xs text-slate-500 mt-1">Δ {{ kpi.delta_income }}</div>{% endif %}
+    </div>
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-xl p-4">
+      <div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-medium">{{ d('kpi_balance', lang) }}</div>
+      <div class="text-xl sm:text-2xl font-bold mt-1 {{ 'text-slate-900 dark:text-slate-100' if kpi.balance_positive else 'text-red-600 dark:text-red-400' }}">{{ kpi.balance }}</div>
+      {% if kpi.delta_balance %}<div class="text-xs text-slate-500 mt-1">Δ {{ kpi.delta_balance }}</div>{% endif %}
+    </div>
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-xl p-4">
+      <div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-medium">{{ d('kpi_tx', lang) }}</div>
+      <div class="text-xl sm:text-2xl font-bold mt-1">{{ kpi.tx_count }}</div>
+      {% if kpi.delta_tx %}<div class="text-xs text-slate-500 mt-1">Δ {{ kpi.delta_tx }}</div>{% endif %}
+    </div>
+  </div>
+
+  {# Row 1: timeline + donut #}
+  <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+    <div class="lg:col-span-3 bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-4">
+      <h3 class="font-semibold mb-2">{{ d('chart_timeline', lang) }}</h3>
+      <div id="chart-timeline" class="w-full h-72 sm:h-80"></div>
+    </div>
+    <div class="lg:col-span-2 bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-4">
+      <h3 class="font-semibold mb-2">{{ d('chart_donut', lang) }}</h3>
+      <div id="chart-donut" class="w-full h-72 sm:h-80"></div>
+    </div>
+  </div>
+
+  {# Row 2: bar + cumulative #}
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-4">
+      <h3 class="font-semibold mb-2">{{ d('chart_bar', lang) }}</h3>
+      <div id="chart-bar" class="w-full h-72 sm:h-80"></div>
+    </div>
+    <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-4">
+      <h3 class="font-semibold mb-2">{{ d('chart_cumulative', lang) }}</h3>
+      <div id="chart-cumulative" class="w-full h-72 sm:h-80"></div>
+    </div>
+  </div>
+
+  {# Row 3: comparison #}
+  <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-4">
+    <h3 class="font-semibold">{{ d('comparison_title', lang) }}</h3>
+    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 mb-2">{{ d('prev_period', lang, start=prev_start, end=prev_end) }}</p>
+    {% if has_prev_data and comparison_chart %}
+      <div id="chart-comparison" class="w-full h-64 sm:h-80"></div>
+    {% else %}
+      <p class="text-sm text-slate-500 dark:text-slate-400 py-8 text-center">{{ d('no_prev_data', lang) }}</p>
+    {% endif %}
+  </div>
+
+  {# Row 4: monthly #}
+  <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-4">
+    <h3 class="font-semibold mb-2">{{ d('chart_monthly', lang) }}</h3>
+    {% if monthly_chart %}
+      <div id="chart-monthly" class="w-full h-72 sm:h-80"></div>
+    {% else %}
+      <p class="text-sm text-slate-500 dark:text-slate-400 py-8 text-center">{{ d('chart_no_history', lang) }}</p>
+    {% endif %}
+  </div>
+
+  {# Top expenses #}
+  <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl overflow-hidden">
+    <div class="p-4 border-b border-slate-200 dark:border-slate-800">
+      <h3 class="font-semibold">{{ d('top_expenses', lang) }}</h3>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 dark:bg-slate-950 text-xs uppercase text-slate-500">
+          <tr>
+            <th class="px-3 py-2 text-left">{{ d('col_id', lang) }}</th>
+            <th class="px-3 py-2 text-left">{{ d('col_datetime', lang) }}</th>
+            <th class="px-3 py-2 text-left">{{ d('col_type', lang) }}</th>
+            <th class="px-3 py-2 text-left">{{ d('col_desc', lang) }}</th>
+            <th class="px-3 py-2 text-right">{{ d('col_value', lang) }}</th>
+            <th class="px-3 py-2 text-left">{{ d('col_category', lang) }}</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+          {% for tx in top_expenses %}
+            <tr>
+              <td class="px-3 py-2 text-slate-500">#{{ tx.id }}</td>
+              <td class="px-3 py-2 whitespace-nowrap">{{ tx.time_str }}</td>
+              <td class="px-3 py-2 {{ 'text-green-600 dark:text-green-400' if tx.is_income else 'text-red-600 dark:text-red-400' }}">{{ tx.type_display }}</td>
+              <td class="px-3 py-2">{{ tx.description }}</td>
+              <td class="px-3 py-2 text-right font-medium">{{ tx.amount_str }}</td>
+              <td class="px-3 py-2">{{ tx.category_display }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# Full transaction log + search #}
+  <div class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl">
+    <div class="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+      <h3 class="font-semibold">{{ d('all_tx', lang) }}</h3>
+      <form method="get" action="/dashboard" class="flex gap-2 w-full sm:w-auto">
+        <input type="hidden" name="period" value="{{ period }}">
+        {% if period == 'custom' %}
+          <input type="hidden" name="custom_start" value="{{ custom_start }}">
+          <input type="hidden" name="custom_end" value="{{ custom_end }}">
+        {% endif %}
+        <input type="hidden" name="type" value="{{ type_filter }}">
+        <input type="search" name="search" value="{{ search }}" placeholder="{{ d('search', lang) }}" class="flex-1 sm:w-64 rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-3 py-1.5 text-sm">
+        <button type="submit" class="bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-sm font-medium px-3 py-1.5 rounded-lg">🔍</button>
+      </form>
+    </div>
+    <p class="px-4 py-2 text-xs text-slate-500">{{ d('showing', lang, shown=shown_rows, total=total_rows) }}</p>
+    <div class="overflow-x-auto max-h-96 overflow-y-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 dark:bg-slate-950 text-xs uppercase text-slate-500 sticky top-0">
+          <tr>
+            <th class="px-3 py-2 text-left">{{ d('col_id', lang) }}</th>
+            <th class="px-3 py-2 text-left">{{ d('col_datetime', lang) }}</th>
+            <th class="px-3 py-2 text-left">{{ d('col_type', lang) }}</th>
+            <th class="px-3 py-2 text-left">{{ d('col_desc', lang) }}</th>
+            <th class="px-3 py-2 text-right">{{ d('col_value', lang) }}</th>
+            <th class="px-3 py-2 text-left">{{ d('col_category', lang) }}</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+          {% for tx in rows_for_table[:200] %}
+            <tr>
+              <td class="px-3 py-2 text-slate-500">#{{ tx.id }}</td>
+              <td class="px-3 py-2 whitespace-nowrap">{{ tx.time_str }}</td>
+              <td class="px-3 py-2 {{ 'text-green-600 dark:text-green-400' if tx.is_income else 'text-red-600 dark:text-red-400' }}">{{ tx.type_display }}</td>
+              <td class="px-3 py-2">{{ tx.description }}</td>
+              <td class="px-3 py-2 text-right font-medium">{{ tx.amount_str }}</td>
+              <td class="px-3 py-2">{{ tx.category_display }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% endif %}
+</div>
+
+{% if has_data %}
+<script id="chart-data" type="application/json">
+{
+  "timeline": {{ charts.timeline | tojson }},
+  "donut": {{ charts.donut | tojson }},
+  "bar": {{ charts.bar | tojson }},
+  "cumulative": {{ charts.cumulative | tojson }},
+  "comparison": {{ comparison_chart | tojson if comparison_chart else 'null' | safe }},
+  "monthly": {{ monthly_chart | tojson if monthly_chart else 'null' | safe }}
+}
+</script>
+<script>
+  (function () {
+    function init() {
+      if (typeof Plotly === "undefined") { return setTimeout(init, 30); }
+      var raw = document.getElementById("chart-data").textContent;
+      var data = JSON.parse(raw);
+      var cfg = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d","select2d"]};
+      function draw(id, spec) {
+        var el = document.getElementById(id);
+        if (el && spec) Plotly.newPlot(el, spec.data, spec.layout, cfg);
+      }
+      draw("chart-timeline", data.timeline);
+      draw("chart-donut", data.donut);
+      draw("chart-bar", data.bar);
+      draw("chart-cumulative", data.cumulative);
+      if (data.comparison) draw("chart-comparison", data.comparison);
+      if (data.monthly) draw("chart-monthly", data.monthly);
+    }
+    if (document.readyState !== "loading") init(); else document.addEventListener("DOMContentLoaded", init);
+  })();
+</script>
+{% endif %}
+{% endblock %}

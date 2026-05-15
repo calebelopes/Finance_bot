@@ -1,0 +1,5 @@
+{# Out-of-band KPI strip update. Returned alongside chat responses and after
+   row deletes so the header refreshes without a full page reload. #}
+<div id="kpi-strip" hx-swap-oob="true" class="grid grid-cols-3 gap-2 sm:gap-4 mb-4">
+  {% include "app/_kpi_strip.html" %}
+</div>

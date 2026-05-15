@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% set active = 'recurring' %}
+{% block title %}{{ d('recurring_title', lang) }} · Finance{% endblock %}
+
+{% block topbar %}{% include "_partials/topbar.html" %}{% endblock %}
+{% block bottomnav %}{% include "_partials/bottomnav.html" %}{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 py-4 sm:py-6 pb-24 md:pb-8 space-y-6">
+
+  <h1 class="text-2xl sm:text-3xl font-bold">{{ d('recurring_title', lang) }}</h1>
+
+  {% if request.query_params.get('added') %}
+    <div class="rounded-lg bg-green-50 dark:bg-green-950 ring-1 ring-green-200 dark:ring-green-900 px-4 py-3 text-sm text-green-700 dark:text-green-300">{{ d('recurring_added', lang) }}</div>
+  {% elif request.query_params.get('toggled') %}
+    <div class="rounded-lg bg-blue-50 dark:bg-blue-950 ring-1 ring-blue-200 dark:ring-blue-900 px-4 py-3 text-sm text-blue-700 dark:text-blue-300">{{ d('recurring_toggled', lang) }}</div>
+  {% elif request.query_params.get('deleted') %}
+    <div class="rounded-lg bg-amber-50 dark:bg-amber-950 ring-1 ring-amber-200 dark:ring-amber-900 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">{{ d('recurring_deleted', lang) }}</div>
+  {% endif %}
+
+  <section class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl p-5">
+    <h2 class="font-semibold mb-4">{{ d('recurring_add_title', lang) }}</h2>
+    <form method="post" action="/recurring" class="grid gap-3 sm:grid-cols-5">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="sm:col-span-2">
+        <label class="block text-xs text-slate-500 mb-1">{{ d('recurring_col_desc', lang) }}</label>
+        <input type="text" name="description" required class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-3 py-2">
+      </div>
+      <div>
+        <label class="block text-xs text-slate-500 mb-1">{{ d('recurring_col_amount', lang) }}</label>
+        <input type="text" name="amount" inputmode="decimal" required class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-3 py-2">
+      </div>
+      <div>
+        <label class="block text-xs text-slate-500 mb-1">{{ d('col_type', lang) }}</label>
+        <select name="type" class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-3 py-2">
+          <option value="expense">{{ d('type_expense', lang) }}</option>
+          <option value="income">{{ d('type_income', lang) }}</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-500 mb-1">{{ d('recurring_col_day', lang) }}</label>
+        <input type="number" name="day" min="1" max="28" placeholder="1-28" class="w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950 px-3 py-2">
+      </div>
+      <div class="sm:col-span-5">
+        <button type="submit" class="bg-brand-600 hover:bg-brand-700 text-white font-medium px-5 py-2.5 rounded-lg">{{ d('recurring_add_button', lang) }}</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="bg-white dark:bg-slate-900 ring-1 ring-slate-200 dark:ring-slate-800 rounded-2xl overflow-hidden">
+    <div class="p-4 border-b border-slate-200 dark:border-slate-800">
+      <h2 class="font-semibold">{{ d('recurring_list_title', lang) }}</h2>
+    </div>
+    {% if not rules %}
+      <p class="p-8 text-center text-slate-500 dark:text-slate-400">{{ d('recurring_empty_state', lang) }}</p>
+    {% else %}
+    <ul class="divide-y divide-slate-100 dark:divide-slate-800">
+      {% for r in rules %}
+      <li class="flex items-center gap-3 p-4">
+        <div class="shrink-0 w-9 h-9 rounded-full flex items-center justify-center
+                    {{ 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' if r.is_income else 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' }}">
+          {{ '+' if r.is_income else '−' }}
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="font-medium truncate {% if not r.active %}line-through opacity-50{% endif %}">{{ r.description }}</span>
+            <span class="font-bold text-sm sm:text-base whitespace-nowrap {{ 'text-green-600 dark:text-green-400' if r.is_income else 'text-slate-900 dark:text-slate-100' }}">{{ r.amount_str }}</span>
+          </div>
+          <div class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            <span class="inline-flex items-center bg-slate-100 dark:bg-slate-800 rounded-md px-1.5 py-0.5 text-[11px]">{{ r.category_display }}</span>
+            <span class="ml-2">{{ d('recurring_day_label', lang, day=r.day_of_month) }}</span>
+            {% if r.next_run %}<span class="ml-2">→ {{ r.next_run }}</span>{% endif %}
+          </div>
+        </div>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <form method="post" action="/recurring/{{ r.id }}/toggle" class="m-0">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" title="{{ d('recurring_toggle', lang) }}"
+                    class="p-2 text-slate-400 hover:text-blue-500 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800">
+              {% if r.active %}⏸{% else %}▶{% endif %}
+            </button>
+          </form>
+          <form method="post" action="/recurring/{{ r.id }}/delete" class="m-0" onsubmit="return confirm('{{ d('recurring_delete_confirm', lang) }}')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="p-2 text-slate-400 hover:text-red-500 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800" title="{{ d('recurring_delete', lang) }}">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>
+            </button>
+          </form>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+
+</div>
+{% endblock %}

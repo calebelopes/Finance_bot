@@ -28,6 +28,7 @@ from telegram.ext import (  # noqa: E402
 from telegram.request import HTTPXRequest  # noqa: E402
 
 from utils import categories, db  # noqa: E402
+from utils.auth import resolve_telegram_user  # noqa: E402
 from utils.export import generate_csv, generate_pdf  # noqa: E402
 from utils.i18n import (  # noqa: E402
     ALL_GREETINGS,
@@ -37,7 +38,6 @@ from utils.i18n import (  # noqa: E402
     SUPPORTED_LANGS,
     TIMEZONE_LABELS,
     cat_name,
-    detect_lang,
     fmt_currency,
     t,
 )
@@ -47,7 +47,7 @@ log = logging.getLogger(__name__)
 
 
 def _dashboard_url() -> str:
-    return os.getenv("DASHBOARD_URL", "http://localhost:8501")
+    return os.getenv("DASHBOARD_URL", "http://localhost:8000")
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,10 @@ def _dashboard_url() -> str:
 
 
 def _get_timezone(user_id: int | None = None) -> ZoneInfo:
-    """Return the user's timezone if available, else fall back to env var / default."""
+    """Return the user's timezone if available, else fall back to env var / default.
+
+    user_id is the *local* users.id (already resolved from telegram_id).
+    """
     if user_id:
         prefs = db.get_user_preferences(user_id)
         tz_name = prefs.get("timezone")
@@ -68,7 +71,8 @@ def _get_timezone(user_id: int | None = None) -> ZoneInfo:
     return ZoneInfo(os.getenv("TIMEZONE", "America/Sao_Paulo"))
 
 
-def _is_authorized(user_id: int) -> bool:
+def _is_authorized(telegram_id: int) -> bool:
+    """Check the ALLOWED_USERS env-var allowlist by Telegram id."""
     allowed = os.getenv("ALLOWED_USERS", "").strip()
     if not allowed:
         return True
@@ -77,18 +81,22 @@ def _is_authorized(user_id: int) -> bool:
         uid = uid.strip()
         if uid.isdigit():
             allowed_ids.add(int(uid))
-    return user_id in allowed_ids
+    return telegram_id in allowed_ids
+
+
+def _resolve_user_id(update: Update) -> tuple[int, str]:
+    """Resolve a Telegram update's user to (local_user_id, lang).
+
+    Thin Telegram-aware wrapper around utils.auth.resolve_telegram_user.
+    """
+    tg = update.effective_user
+    return resolve_telegram_user(tg.id, tg.username, tg.language_code)
 
 
 def _get_lang(update: Update) -> str:
     """Get user's language, auto-detecting and persisting on first contact."""
-    user = update.effective_user
-    lang = db.get_user_lang(user.id)
-    if lang and lang != "pt":
-        return lang
-    detected = detect_lang(user.language_code)
-    db.ensure_user_with_lang(user.id, user.username, detected)
-    return detected
+    _, lang = _resolve_user_id(update)
+    return lang
 
 
 def _period_range_utc(period: str, user_id: int | None = None) -> tuple[str, str]:
@@ -172,29 +180,41 @@ def _format_transactions(transactions: list[dict], title: str, lang: str, user_i
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    tg_user = update.effective_user
+    if not _is_authorized(tg_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
+
+    # Deep-link from web /link-telegram: /start link_<code>
+    if context.args and context.args[0].startswith("link_"):
+        code = context.args[0][5:]
+        target_local_id = db.consume_telegram_link_code(code)
+        if target_local_id is None:
+            await update.message.reply_text(t("link_invalid", lang))
+            return
+        if not db.link_telegram_to_user(target_local_id, tg_user.id):
+            await update.message.reply_text(t("link_already_taken", lang))
+            return
+        await update.message.reply_text(t("link_success", lang))
+        return
+
     await update.message.reply_text(t("start", lang))
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    _, lang = _resolve_user_id(update)
     await update.message.reply_text(t("help", lang, dashboard_url=_dashboard_url()))
 
 
 async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    _, lang = _resolve_user_id(update)
     keyboard = [
         [InlineKeyboardButton(label, callback_data=f"lang:{code}")]
         for code, label in LANG_LABELS.items()
@@ -211,75 +231,72 @@ async def cb_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chosen = query.data.split(":", 1)[1]
     if chosen not in SUPPORTED_LANGS:
         return
-    db.set_lang(query.from_user.id, chosen)
+    local_id = db.ensure_user_by_telegram_id(query.from_user.id, query.from_user.username, None)
+    db.set_lang(local_id, chosen)
     await query.edit_message_text(t("lang_set", chosen))
 
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
-        start_utc, end_utc = _period_range_utc("today", user.id)
-        txs = db.get_transactions(user.id, start_utc, end_utc)
-        now_local = datetime.datetime.now(_get_timezone(user.id))
+        start_utc, end_utc = _period_range_utc("today", local_id)
+        txs = db.get_transactions(local_id, start_utc, end_utc)
+        now_local = datetime.datetime.now(_get_timezone(local_id))
         title = t("today_title", lang, date=now_local.strftime("%d/%m/%Y"))
-        await update.message.reply_text(_format_transactions(txs, title, lang, user.id))
+        await update.message.reply_text(_format_transactions(txs, title, lang, local_id))
     except Exception:
         log.exception("Error in /today")
         await update.message.reply_text(t("error", lang))
 
 
 async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
-        start_utc, end_utc = _period_range_utc("week", user.id)
-        txs = db.get_transactions(user.id, start_utc, end_utc)
+        start_utc, end_utc = _period_range_utc("week", local_id)
+        txs = db.get_transactions(local_id, start_utc, end_utc)
         title = t("week_title", lang)
-        await update.message.reply_text(_format_transactions(txs, title, lang, user.id))
+        await update.message.reply_text(_format_transactions(txs, title, lang, local_id))
     except Exception:
         log.exception("Error in /week")
         await update.message.reply_text(t("error", lang))
 
 
 async def cmd_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
-        start_utc, end_utc = _period_range_utc("month", user.id)
-        txs = db.get_transactions(user.id, start_utc, end_utc)
-        now_local = datetime.datetime.now(_get_timezone(user.id))
+        start_utc, end_utc = _period_range_utc("month", local_id)
+        txs = db.get_transactions(local_id, start_utc, end_utc)
+        now_local = datetime.datetime.now(_get_timezone(local_id))
         month_name = MONTHS[lang][now_local.month]
         title = t("month_title", lang, month=month_name, year=now_local.year)
-        await update.message.reply_text(_format_transactions(txs, title, lang, user.id))
+        await update.message.reply_text(_format_transactions(txs, title, lang, local_id))
     except Exception:
         log.exception("Error in /month")
         await update.message.reply_text(t("error", lang))
 
 
 async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
-        start_utc, end_utc = _period_range_utc("month", user.id)
-        now_local = datetime.datetime.now(_get_timezone(user.id))
+        start_utc, end_utc = _period_range_utc("month", local_id)
+        now_local = datetime.datetime.now(_get_timezone(local_id))
         month_name = MONTHS[lang][now_local.month]
         title = t("summary_title", lang, month=month_name, year=now_local.year)
 
-        expense_rows = db.get_summary_by_category(user.id, start_utc, end_utc, "expense")
-        income_rows = db.get_summary_by_category(user.id, start_utc, end_utc, "income")
+        expense_rows = db.get_summary_by_category(local_id, start_utc, end_utc, "expense")
+        income_rows = db.get_summary_by_category(local_id, start_utc, end_utc, "income")
 
         if not expense_rows and not income_rows:
             await update.message.reply_text(f"{title}\n\n{t('no_expenses', lang)}")
@@ -318,11 +335,10 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
         if not context.args or len(context.args) != 1:
             await update.message.reply_text(t("delete_usage", lang))
@@ -333,7 +349,7 @@ async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text(t("delete_usage", lang))
             return
 
-        if db.delete_transaction(user.id, tx_id):
+        if db.delete_transaction(local_id, tx_id):
             await update.message.reply_text(t("deleted", lang, id=tx_id))
         else:
             await update.message.reply_text(t("delete_not_found", lang, id=tx_id))
@@ -343,11 +359,11 @@ async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_setpassword(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    tg_user = update.effective_user
+    if not _is_authorized(tg_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
         if not context.args:
             await update.message.reply_text(t("password_usage", lang))
@@ -357,7 +373,7 @@ async def cmd_setpassword(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text(t("password_too_short", lang))
             return
 
-        db.set_password(user.id, password)
+        db.set_password(local_id, password)
 
         try:
             await update.message.delete()
@@ -367,7 +383,7 @@ async def cmd_setpassword(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.effective_chat.send_message(
             t("password_set", lang, dashboard_url=_dashboard_url())
         )
-        log.info("Password set for user %s (%d)", user.username, user.id)
+        log.info("Password set for user %s (local=%d, telegram=%d)", tg_user.username, local_id, tg_user.id)
     except Exception:
         log.exception("Error in /setpassword")
         await update.message.reply_text(t("error", lang))
@@ -375,34 +391,39 @@ async def cmd_setpassword(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Toggle admin status. Only BOT_OWNER can run this."""
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    tg_user = update.effective_user
+    if not _is_authorized(tg_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
 
     owner_raw = os.getenv("BOT_OWNER", "").strip()
-    if not owner_raw.isdigit() or user.id != int(owner_raw):
+    if not owner_raw.isdigit() or tg_user.id != int(owner_raw):
         await update.message.reply_text(t("admin_not_allowed", lang))
         return
 
-    target_id = user.id
+    target_local_id = local_id
     if context.args and context.args[0].isdigit():
-        target_id = int(context.args[0])
+        # Argument is treated as a Telegram id for ergonomic admin commands.
+        target_tg_id = int(context.args[0])
+        existing = db.get_user_by_telegram_id(target_tg_id)
+        if existing is None:
+            await update.message.reply_text(t("admin_user_not_found", lang))
+            return
+        target_local_id = existing["id"]
 
-    currently_admin = db.is_admin(target_id)
-    db.set_admin(target_id, not currently_admin)
+    currently_admin = db.is_admin(target_local_id)
+    db.set_admin(target_local_id, not currently_admin)
     msg_key = "admin_revoked" if currently_admin else "admin_granted"
     await update.message.reply_text(t(msg_key, lang))
 
 
 async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
-    prefs = db.get_user_preferences(user.id)
+    local_id, lang = _resolve_user_id(update)
+    prefs = db.get_user_preferences(local_id)
     lines = [
         t("config_title", lang),
         t("config_lang", lang, value=LANG_LABELS.get(lang, lang)),
@@ -415,11 +436,10 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_setcurrency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    _, lang = _resolve_user_id(update)
     keyboard = [
         [InlineKeyboardButton(label, callback_data=f"currency:{code}")]
         for code, label in CURRENCY_LABELS.items()
@@ -436,18 +456,17 @@ async def cb_setcurrency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chosen = query.data.split(":", 1)[1].upper()
     if not db.is_valid_currency(chosen):
         return
-    user_id = query.from_user.id
-    db.set_user_preference(user_id, "currency_default", chosen)
-    lang = db.get_user_lang(user_id)
+    local_id = db.ensure_user_by_telegram_id(query.from_user.id, query.from_user.username, None)
+    db.set_user_preference(local_id, "currency_default", chosen)
+    lang = db.get_user_lang(local_id)
     await query.edit_message_text(t("setcurrency_done", lang, currency=chosen))
 
 
 async def cmd_settimezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    _, lang = _resolve_user_id(update)
     keyboard = [
         [InlineKeyboardButton(label, callback_data=f"tz:{tz_key}")]
         for tz_key, label in TIMEZONE_LABELS.items()
@@ -464,20 +483,19 @@ async def cb_settimezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chosen = query.data.split(":", 1)[1]
     if chosen not in TIMEZONE_LABELS:
         return
-    user_id = query.from_user.id
-    db.set_user_preference(user_id, "timezone", chosen)
-    lang = db.get_user_lang(user_id)
+    local_id = db.ensure_user_by_telegram_id(query.from_user.id, query.from_user.username, None)
+    db.set_user_preference(local_id, "timezone", chosen)
+    lang = db.get_user_lang(local_id)
     await query.edit_message_text(t("settimezone_done", lang, timezone=chosen))
 
 
 async def cmd_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
-        rules = db.get_recurring(user.id)
+        rules = db.get_recurring(local_id)
         if not rules:
             await update.message.reply_text(t("recurring_empty", lang))
             return
@@ -498,11 +516,10 @@ async def cmd_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_addrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
         if not context.args or len(context.args) < 2:
             await update.message.reply_text(t("addrecurring_usage", lang))
@@ -526,15 +543,15 @@ async def cmd_addrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             except ValueError:
                 pass
 
-        prefs = db.get_user_preferences(user.id)
+        prefs = db.get_user_preferences(local_id)
         currency = prefs.get("currency_default", "BRL")
         category = categories.infer_category(desc, action_type)
         rec_id = db.add_recurring(
-            user.id, desc, amount, category, action_type,
+            local_id, desc, amount, category, action_type,
             currency_code=currency, day_of_month=day,
         )
         amount_str = fmt_currency(amount, lang, currency_code=currency)
-        rule = db.get_recurring(user.id)
+        rule = db.get_recurring(local_id)
         actual_day = next((r["day_of_month"] for r in rule if r["id"] == rec_id), day)
         await update.message.reply_text(
             t("addrecurring_done", lang, id=rec_id, description=desc, amount=amount_str, day=actual_day)
@@ -545,11 +562,10 @@ async def cmd_addrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def cmd_delrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
         if not context.args or len(context.args) != 1:
             await update.message.reply_text(t("delrecurring_usage", lang))
@@ -559,7 +575,7 @@ async def cmd_delrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except ValueError:
             await update.message.reply_text(t("delrecurring_usage", lang))
             return
-        if db.delete_recurring(user.id, rec_id):
+        if db.delete_recurring(local_id, rec_id):
             await update.message.reply_text(t("delrecurring_done", lang, id=rec_id))
         else:
             await update.message.reply_text(t("delrecurring_not_found", lang, id=rec_id))
@@ -569,11 +585,10 @@ async def cmd_delrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def cmd_togglerecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
         if not context.args or len(context.args) != 1:
             await update.message.reply_text(t("togglerecurring_usage", lang))
@@ -583,7 +598,7 @@ async def cmd_togglerecurring(update: Update, context: ContextTypes.DEFAULT_TYPE
         except ValueError:
             await update.message.reply_text(t("togglerecurring_usage", lang))
             return
-        result = db.toggle_recurring(user.id, rec_id)
+        result = db.toggle_recurring(local_id, rec_id)
         if result is None:
             await update.message.reply_text(t("delrecurring_not_found", lang, id=rec_id))
         else:
@@ -595,11 +610,10 @@ async def cmd_togglerecurring(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
         period = "month"
         if context.args:
@@ -611,8 +625,8 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             elif p in ("month", "mes", "tsuki"):
                 period = "month"
 
-        start_utc, end_utc = _period_range_utc(period, user.id)
-        txs = db.get_transactions(user.id, start_utc, end_utc)
+        start_utc, end_utc = _period_range_utc(period, local_id)
+        txs = db.get_transactions(local_id, start_utc, end_utc)
         if not txs:
             await update.message.reply_text(t("export_empty", lang))
             return
@@ -637,11 +651,10 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
     try:
         if not context.args or len(context.args) != 2:
             await update.message.reply_text(t("edit_usage", lang))
@@ -657,7 +670,7 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(t("edit_usage", lang))
             return
 
-        if db.edit_transaction(user.id, tx_id, new_value):
+        if db.edit_transaction(local_id, tx_id, new_value):
             await update.message.reply_text(
                 t("edited", lang, id=tx_id, value=fmt_currency(new_value, lang))
             )
@@ -687,8 +700,8 @@ def _compute_backdated_ts(date_offset: int, user_id: int) -> str:
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not _is_authorized(user.id):
+    tg_user = update.effective_user
+    if not _is_authorized(tg_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
 
@@ -696,7 +709,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not text:
         return
 
-    lang = _get_lang(update)
+    local_id, lang = _resolve_user_id(update)
 
     normalized = " ".join(text.strip().lower().split())
     if normalized in ALL_GREETINGS:
@@ -723,7 +736,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             result.raw_description or description, action_type,
         )
 
-        prefs = db.get_user_preferences(user.id)
+        prefs = db.get_user_preferences(local_id)
         user_currency = prefs.get("currency_default", "BRL")
         tx_currency = parsed_currency or user_currency
 
@@ -734,10 +747,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         created_at_override = None
         if date_offset is not None and date_offset != 0:
-            created_at_override = _compute_backdated_ts(date_offset, user.id)
+            created_at_override = _compute_backdated_ts(date_offset, local_id)
 
         tx_id = db.store_transaction(
-            user.id, user.username, description, value, category, action_type,
+            local_id, tg_user.username, description, value, category, action_type,
             currency_code=tx_currency,
             amount_converted=amount_converted,
             exchange_rate=exchange_rate,
@@ -755,7 +768,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply += f"\n  ≈ {converted_str} (1 {tx_currency} = {exchange_rate:.4f} {user_currency})"
 
         if created_at_override and date_offset is not None:
-            tz = _get_timezone(user.id)
+            tz = _get_timezone(local_id)
             bd_dt = datetime.datetime.fromisoformat(created_at_override).astimezone(tz)
             reply += "\n" + t("backdated", lang, date=bd_dt.strftime("%d/%m/%Y"))
 
@@ -778,12 +791,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         await update.message.reply_text(reply, reply_markup=markup)
         log.info(
-            "Stored #%d [%s] for %s (%d): %s = %.2f %s [%s] (conf=%.2f)",
-            tx_id, action_type, user.username, user.id,
+            "Stored #%d [%s] for %s (local=%d, telegram=%d): %s = %.2f %s [%s] (conf=%.2f)",
+            tx_id, action_type, tg_user.username, local_id, tg_user.id,
             description, value, tx_currency, category, confidence,
         )
     except Exception:
-        log.exception("Error storing transaction for user %d", user.id)
+        log.exception("Error storing transaction for user %d", local_id)
         await update.message.reply_text(t("error", lang))
 
 
@@ -799,15 +812,15 @@ async def cb_fixcat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except ValueError:
         return
     new_category = parts[2]
-    user_id = query.from_user.id
-    lang = db.get_user_lang(user_id)
+    local_id = db.ensure_user_by_telegram_id(query.from_user.id, query.from_user.username, None)
+    lang = db.get_user_lang(local_id)
 
-    if db.update_transaction_category(user_id, tx_id, new_category):
+    if db.update_transaction_category(local_id, tx_id, new_category):
         cat_display = cat_name(new_category, lang)
         await query.edit_message_text(
             query.message.text + "\n" + t("category_corrected", lang, id=tx_id, category=cat_display)
         )
-    log.info("User %d corrected tx #%d category to %s", user_id, tx_id, new_category)
+    log.info("User local=%d corrected tx #%d category to %s", local_id, tx_id, new_category)
 
 
 # ---------------------------------------------------------------------------

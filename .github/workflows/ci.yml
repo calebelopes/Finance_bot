@@ -22,6 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
+          pip install -r web/requirements.txt
           pip install -r requirements-dev.txt
 
       - name: Lint
@@ -91,7 +92,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           source: >-
-            bot/,utils/,dashboard/,tests/,
+            bot/,utils/,web/,tests/,
             Dockerfile,docker-compose.yml,
             requirements.txt,requirements-dev.txt,
             pyproject.toml,VERSION,.env.example
