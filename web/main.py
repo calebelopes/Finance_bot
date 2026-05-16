@@ -5,8 +5,11 @@ Server-rendered Jinja2 + Tailwind + HTMX stack. Mobile-first.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -26,11 +29,47 @@ from web.routes import dashboard as dashboard_routes  # noqa: E402
 from web.routes import landing as landing_routes  # noqa: E402
 from web.routes import recurring as recurring_routes  # noqa: E402
 from web.routes import settings as settings_routes  # noqa: E402
+from web.scheduler import _scheduler_loop  # noqa: E402
 from web.templates_setup import templates  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 _HERE = Path(__file__).resolve().parent
 
-app = FastAPI(title="Finance", docs_url=None, redoc_url=None)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Boot/shut the recurring-transaction scheduler with the app.
+
+    Pre-v2.x this lived in the bot process; since the web is the
+    canonical surface now, the scheduler runs here so single-service
+    deployments (just `docker compose up -d web`) still execute
+    recurring rules. Tests can disable it by setting
+    ``WEB_SCHEDULER_DISABLED=1`` in the environment.
+    """
+    stop_event: asyncio.Event | None = None
+    task: asyncio.Task | None = None
+    if os.getenv("WEB_SCHEDULER_DISABLED") != "1":
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(_scheduler_loop(stop_event))
+    try:
+        yield
+    finally:
+        if stop_event is not None:
+            stop_event.set()
+        if task is not None:
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except (TimeoutError, asyncio.TimeoutError):
+                log.warning("scheduler did not stop within 5s; cancelling")
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+
+app = FastAPI(title="Finance", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 db.setup_database()
 

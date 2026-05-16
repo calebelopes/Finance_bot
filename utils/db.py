@@ -1,6 +1,7 @@
 import datetime
 import hashlib
 import logging
+import os
 import secrets
 import sqlite3
 from pathlib import Path
@@ -15,6 +16,17 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _db_path() -> str:
+    """Return the SQLite database path.
+
+    Honors the ``DB_PATH`` env var (set by docker-compose to
+    ``/app/data/data.db``) so the same code works in the container and in
+    local dev. When unset, falls back to ``<repo>/data/data.db``.
+    """
+    override = os.getenv("DB_PATH")
+    if override:
+        path = Path(override)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return str(path)
     project_root = Path(__file__).resolve().parent.parent
     db_dir = project_root / "data"
     db_dir.mkdir(exist_ok=True)
@@ -104,6 +116,21 @@ def setup_database() -> None:  # noqa: C901
         )
         if "email" not in user_cols:
             cur.execute("ALTER TABLE users ADD COLUMN email TEXT;")
+        # Case-insensitive partial unique index on email. We use LOWER(email)
+        # to match how email_exists / authenticate_by_identifier do lookups,
+        # and a WHERE clause so the legacy NULL-emails (and any web users
+        # still pending email setup) don't conflict with each other. This is
+        # idempotent so safe to run on every boot.
+        try:
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower "
+                "ON users(LOWER(email)) WHERE email IS NOT NULL"
+            )
+        except sqlite3.IntegrityError:
+            # Pre-existing duplicates would block index creation; log and
+            # keep going so the app still starts. The web layer enforces
+            # uniqueness at signup time as a backstop.
+            log.exception("Could not create unique index on users.email — duplicates exist")
         if "created_at" not in user_cols:
             cur.execute("ALTER TABLE users ADD COLUMN created_at TEXT;")
             cur.execute(
@@ -133,13 +160,18 @@ def setup_database() -> None:  # noqa: C901
             "CREATE INDEX IF NOT EXISTS idx_app_events_created_at ON app_events(created_at);"
         )
 
+        # NOTE on FK CASCADE: SQLite does not support modifying a FK
+        # constraint via ALTER TABLE, so existing databases keep the
+        # original (no-cascade) FK; ``web.routes.settings.delete_account``
+        # remains the canonical cleanup path. Fresh installs (CI, new
+        # local dev) get the proper CASCADE and FK declarations below.
         cur.execute("""
             CREATE TABLE IF NOT EXISTS usage_events (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id    INTEGER NOT NULL,
                 event_type TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id)
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
         cur.execute(
@@ -223,10 +255,25 @@ def setup_database() -> None:  # noqa: C901
             CREATE TABLE IF NOT EXISTS user_preferences (
                 user_id           INTEGER PRIMARY KEY REFERENCES users(id),
                 currency_default  TEXT NOT NULL DEFAULT 'BRL' REFERENCES currencies(code),
-                timezone          TEXT NOT NULL DEFAULT 'America/Sao_Paulo',
-                confirmation_mode TEXT NOT NULL DEFAULT 'auto'
+                timezone          TEXT NOT NULL DEFAULT 'America/Sao_Paulo'
             )
         """)
+        # Legacy column from a planned "confirm transactions" feature that
+        # was never wired into product. Drop on existing DBs (SQLite ≥ 3.35).
+        # The DROP COLUMN call is best-effort: older SQLite or pre-existing
+        # views/triggers would block it; in that case we just leave the
+        # vestigial column behind and treat it as ignored.
+        if "confirmation_mode" in _table_columns(conn, "user_preferences"):
+            try:
+                cur.execute(
+                    "ALTER TABLE user_preferences DROP COLUMN confirmation_mode"
+                )
+                log.info("Dropped legacy user_preferences.confirmation_mode column")
+            except sqlite3.OperationalError:
+                log.debug(
+                    "Could not drop user_preferences.confirmation_mode "
+                    "(legacy SQLite); column will be ignored"
+                )
 
         # -- recurring_transactions ------------------------------------------
         cur.execute("""
@@ -238,23 +285,50 @@ def setup_database() -> None:  # noqa: C901
                 currency_code TEXT NOT NULL DEFAULT 'BRL' REFERENCES currencies(code),
                 category_id   INTEGER REFERENCES categories(id),
                 type          TEXT NOT NULL DEFAULT 'expense',
-                frequency     TEXT NOT NULL DEFAULT 'monthly',
                 day_of_month  INTEGER,
                 next_run      TEXT,
                 active        INTEGER NOT NULL DEFAULT 1,
                 created_at    TEXT NOT NULL
             )
         """)
+        # Legacy column from a planned weekly/yearly recurrence feature that
+        # was never implemented. ``advance_recurring`` always increments by
+        # one month, so ``frequency`` is dead weight. Drop it on existing
+        # DBs (SQLite ≥ 3.35); older engines just keep the unused column.
+        if "frequency" in _table_columns(conn, "recurring_transactions"):
+            try:
+                cur.execute(
+                    "ALTER TABLE recurring_transactions DROP COLUMN frequency"
+                )
+                log.info("Dropped legacy recurring_transactions.frequency column")
+            except sqlite3.OperationalError:
+                log.debug(
+                    "Could not drop recurring_transactions.frequency "
+                    "(legacy SQLite); column will be ignored"
+                )
 
         # -- recurring_logs --------------------------------------------------
+        # transaction_id is nullable because the link is best-effort: if
+        # the transaction is later deleted by the user, we keep the
+        # execution audit trail with a NULL pointer rather than dropping
+        # the log row. See FK CASCADE note on usage_events for migration
+        # behavior on existing DBs.
+        # ``notified_at`` is the bookkeeping field the Telegram bot uses
+        # to know which executions still need a DM ping; the web
+        # scheduler writes the row with notified_at=NULL, the bot fills
+        # it in once the user has been notified (or skips silently when
+        # there's no linked telegram_id).
         cur.execute("""
             CREATE TABLE IF NOT EXISTS recurring_logs (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                recurring_id   INTEGER NOT NULL REFERENCES recurring_transactions(id),
-                transaction_id INTEGER,
-                executed_at    TEXT NOT NULL
+                recurring_id   INTEGER NOT NULL REFERENCES recurring_transactions(id) ON DELETE CASCADE,
+                transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+                executed_at    TEXT NOT NULL,
+                notified_at    TEXT
             )
         """)
+        if "notified_at" not in _table_columns(conn, "recurring_logs"):
+            cur.execute("ALTER TABLE recurring_logs ADD COLUMN notified_at TEXT;")
 
         # ================================================================
         # Migrate actions → transactions
@@ -360,7 +434,9 @@ def setup_database() -> None:  # noqa: C901
 # ---------------------------------------------------------------------------
 
 def _ensure_user(conn: sqlite3.Connection, user_id: int, username: str | None, lang: str | None = None) -> None:
-    """Upsert a user by *local* id (already resolved). Use ensure_user_by_telegram_id for bot flow."""
+    """Upsert a user by *local* id (already resolved). Bot flows should use
+    ``refresh_telegram_user_metadata`` instead — it never silently creates
+    a phantom Telegram-only account."""
     if lang:
         conn.execute(
             """
@@ -648,7 +724,7 @@ def get_user_preferences(user_id: int) -> dict:
 
 def set_user_preference(user_id: int, key: str, value: str) -> None:
     """Update a single preference. Key must be a valid column name."""
-    allowed = {"currency_default", "timezone", "confirmation_mode"}
+    allowed = {"currency_default", "timezone"}
     if key not in allowed:
         raise ValueError(f"Unknown preference key: {key}")
     with _connect() as conn:
@@ -780,39 +856,36 @@ def get_user_by_telegram_id(telegram_id: int) -> dict | None:
     }
 
 
-def ensure_user_by_telegram_id(
+def refresh_telegram_user_metadata(
     telegram_id: int, username: str | None, lang: str | None = None,
-) -> int:
-    """Find-or-create a user identified by Telegram id. Returns the *local* user id.
+) -> int | None:
+    """Refresh username/lang on the locally-linked user, *without* creating one.
 
-    - If a row exists with this telegram_id: refresh username/lang if newer values supplied.
-    - If not: insert a new row with telegram_id set; SQLite assigns the next local id.
+    Web-first contract: signups happen on the website. If a Telegram user
+    pings the bot before linking, ``get_user_by_telegram_id`` returns None
+    and the bot redirects them to the site — we must never silently
+    auto-provision a phantom account here.
+
+    Returns the local users.id when a linked row exists (and was updated),
+    or None if no link is set up yet.
     """
     with _connect() as conn:
         row = conn.execute(
             "SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)
         ).fetchone()
-        if row:
-            local_id = row["id"]
-            if username or lang:
-                conn.execute(
-                    """UPDATE users SET
-                         username = COALESCE(?, username),
-                         lang = COALESCE(?, lang)
-                       WHERE id = ?""",
-                    (username, lang, local_id),
-                )
-                conn.commit()
-            return local_id
-
-        cur = conn.execute(
-            """INSERT INTO users (telegram_id, username, lang, created_at)
-               VALUES (?, ?, ?, ?)""",
-            (telegram_id, username, lang or "pt", _utc_now()),
-        )
-        local_id = cur.lastrowid
-        conn.commit()
-    return local_id
+        if not row:
+            return None
+        local_id = row["id"]
+        if username or lang:
+            conn.execute(
+                """UPDATE users SET
+                     username = COALESCE(?, username),
+                     lang = COALESCE(?, lang)
+                   WHERE id = ?""",
+                (username, lang, local_id),
+            )
+            conn.commit()
+        return local_id
 
 
 def link_telegram_to_user(local_user_id: int, telegram_id: int) -> bool:
@@ -837,6 +910,17 @@ def unlink_telegram(local_user_id: int) -> None:
             "UPDATE users SET telegram_id = NULL WHERE id = ?", (local_user_id,)
         )
         conn.commit()
+
+
+def get_user_telegram_id(local_user_id: int) -> int | None:
+    """Return the Telegram chat id linked to *local_user_id*, or None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT telegram_id FROM users WHERE id = ?", (local_user_id,)
+        ).fetchone()
+    if not row or row["telegram_id"] is None:
+        return None
+    return int(row["telegram_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -1025,10 +1109,14 @@ def add_recurring(
     category: str,
     action_type: str = "expense",
     currency_code: str = "BRL",
-    frequency: str = "monthly",
     day_of_month: int | None = None,
 ) -> int:
-    """Create a new recurring transaction rule. Returns the new rule id."""
+    """Create a new recurring transaction rule. Returns the new rule id.
+
+    Frequency is implicitly monthly: ``advance_recurring`` always shifts
+    ``next_run`` forward by one month. The historical ``frequency`` column
+    was never wired into product and was dropped in the v2.0.x cleanup.
+    """
     now = _utc_now()
     cat_id = get_category_id(category)
     if day_of_month is None:
@@ -1049,10 +1137,10 @@ def add_recurring(
         cur = conn.execute(
             """INSERT INTO recurring_transactions
                (user_id, description, amount, currency_code, category_id, type,
-                frequency, day_of_month, next_run, active, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+                day_of_month, next_run, active, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
             (user_id, description, amount, currency_code, cat_id,
-             action_type, frequency, day_of_month, next_run, now),
+             action_type, day_of_month, next_run, now),
         )
         rec_id = cur.lastrowid
         conn.commit()
@@ -1064,7 +1152,7 @@ def get_recurring(user_id: int) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """SELECT r.id, r.description, r.amount, r.currency_code, r.type,
-                      r.frequency, r.day_of_month, r.next_run, r.active,
+                      r.day_of_month, r.next_run, r.active,
                       c.name_key AS category
                FROM recurring_transactions r
                LEFT JOIN categories c ON c.id = r.category_id
@@ -1109,7 +1197,7 @@ def get_due_recurring() -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """SELECT r.id, r.user_id, r.description, r.amount, r.currency_code,
-                      r.type, r.frequency, r.day_of_month, r.next_run,
+                      r.type, r.day_of_month, r.next_run,
                       c.name_key AS category
                FROM recurring_transactions r
                LEFT JOIN categories c ON c.id = r.category_id
@@ -1142,12 +1230,64 @@ def advance_recurring(rec_id: int) -> None:
         conn.commit()
 
 
-def log_recurring_execution(recurring_id: int, transaction_id: int) -> None:
+def log_recurring_execution(recurring_id: int, transaction_id: int) -> int:
+    """Insert a recurring_logs row with ``notified_at = NULL`` and return its id.
+
+    The bot's notifier loop later picks up rows where ``notified_at`` is
+    NULL, sends the Telegram DM, and stamps ``notified_at`` so each
+    execution is announced at most once.
+    """
     with _connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO recurring_logs (recurring_id, transaction_id, executed_at) "
             "VALUES (?, ?, ?)",
             (recurring_id, transaction_id, _utc_now()),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_pending_recurring_notifications(limit: int = 100) -> list[dict]:
+    """Return recurring_logs rows that haven't been pushed to Telegram yet.
+
+    Each dict carries enough context to build the DM without a second
+    round-trip: the rule's user_id + telegram_id, currency, the executed
+    transaction's amount/description, and the log id (so the caller can
+    stamp ``notified_at`` after a successful send).
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT rl.id              AS log_id,
+                      rl.recurring_id    AS recurring_id,
+                      rl.transaction_id  AS transaction_id,
+                      r.user_id          AS user_id,
+                      u.telegram_id      AS telegram_id,
+                      u.lang             AS lang,
+                      r.description      AS description,
+                      r.amount           AS amount,
+                      r.currency_code    AS currency_code
+               FROM recurring_logs rl
+               JOIN recurring_transactions r ON r.id = rl.recurring_id
+               JOIN users u                  ON u.id = r.user_id
+               WHERE rl.notified_at IS NULL
+               ORDER BY rl.id ASC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_recurring_notified(log_id: int) -> None:
+    """Stamp ``notified_at = now`` on a recurring_logs row.
+
+    Called both after a successful DM and when we know there's nothing
+    to send (web-only user with no linked telegram_id) so the row
+    doesn't keep showing up as pending forever.
+    """
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE recurring_logs SET notified_at = ? WHERE id = ?",
+            (_utc_now(), log_id),
         )
         conn.commit()
 

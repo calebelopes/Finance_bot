@@ -103,8 +103,7 @@ def _resolve_linked_user(update: Update) -> tuple[int | None, str]:
     if local_id is not None and tg.username:
         existing = db.get_user_by_telegram_id(tg.id)
         if existing and tg.username != existing["username"]:
-            # ensure_user_by_telegram_id acts as an UPDATE when a row already exists.
-            db.ensure_user_by_telegram_id(tg.id, tg.username, None)
+            db.refresh_telegram_user_metadata(tg.id, tg.username, None)
     return local_id, lang
 
 
@@ -227,7 +226,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(t("link_already_taken", lang))
             return
         # Sync username/lang on the linked account from Telegram metadata.
-        db.ensure_user_by_telegram_id(tg_user.id, tg_user.username, lang)
+        db.refresh_telegram_user_metadata(tg_user.id, tg_user.username, lang)
         linked_lang = db.get_user_lang(target_local_id) or lang
         await update.message.reply_text(t("link_success", linked_lang))
         return
@@ -413,7 +412,10 @@ async def cmd_setpassword(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text(t("password_usage", lang))
             return
         password = " ".join(context.args)
-        if len(password) < 4:
+        # Keep this in sync with web/routes/auth.py and settings.py: any
+        # asymmetry would let users set a bot-only weak password and then
+        # try to log into the website with it.
+        if len(password) < 6:
             await update.message.reply_text(t("password_too_short", lang))
             return
 
@@ -878,45 +880,67 @@ async def cb_fixcat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _process_due_recurring(application: Application) -> None:
-    """Execute all overdue recurring transactions and notify users."""
-    due = db.get_due_recurring()
-    for rule in due:
+async def _notify_pending_recurring(application: Application) -> None:
+    """Push DMs for recurring executions the bot hasn't announced yet.
+
+    Post-v2.x the *web* scheduler is the canonical executor of recurring
+    rules (``web/scheduler.py``). The bot now plays a smaller role: it
+    polls ``recurring_logs`` for rows with ``notified_at IS NULL``,
+    sends a Telegram DM to the user (when they have a linked
+    ``telegram_id``), and stamps ``notified_at`` so each execution is
+    announced at most once. Web-only users are stamped immediately
+    with no DM attempt — they read updates from the website.
+
+    Idempotency: the ``notified_at`` flag is the marker, so re-running
+    this is safe (and is in fact how we recover from transient Telegram
+    flakiness — the next tick retries unsent rows).
+    """
+    pending = db.get_pending_recurring_notifications()
+    for entry in pending:
+        log_id = entry["log_id"]
+        telegram_id = entry["telegram_id"]
         try:
-            cat = rule.get("category") or "Outros"
-            tx_id = db.store_transaction(
-                rule["user_id"], None, rule["description"], rule["amount"],
-                cat, rule["type"],
-                currency_code=rule.get("currency_code", "BRL"),
-                source="recurring",
-                recurring_id=rule["id"],
+            if telegram_id is None:
+                # Web-only user: nothing to send. Stamp so we don't
+                # re-evaluate this row on every tick.
+                db.mark_recurring_notified(log_id)
+                continue
+
+            lang = entry["lang"] or "pt"
+            amount_str = fmt_currency(
+                entry["amount"], lang,
+                currency_code=entry.get("currency_code"),
             )
-            db.log_recurring_execution(rule["id"], tx_id)
-            db.advance_recurring(rule["id"])
-            lang = db.get_user_lang(rule["user_id"])
-            amount_str = fmt_currency(rule["amount"], lang, currency_code=rule.get("currency_code"))
-            try:
-                await application.bot.send_message(
-                    rule["user_id"],
-                    t("recurring_executed", lang, tx_id=tx_id,
-                      description=rule["description"], amount=amount_str),
-                )
-            except Exception:
-                log.warning("Could not notify user %d about recurring #%d", rule["user_id"], rule["id"])
-            log.info("Executed recurring #%d → tx #%d for user %d", rule["id"], tx_id, rule["user_id"])
+            await application.bot.send_message(
+                telegram_id,
+                t(
+                    "recurring_executed", lang,
+                    tx_id=entry["transaction_id"],
+                    description=entry["description"],
+                    amount=amount_str,
+                ),
+            )
+            db.mark_recurring_notified(log_id)
         except Exception:
-            log.exception("Error executing recurring rule #%d", rule["id"])
+            # Don't stamp on failure: next tick will retry. We log a
+            # single warning to avoid spam if the same row is doomed.
+            log.warning(
+                "Could not notify telegram=%s about recurring log #%d",
+                telegram_id, log_id,
+                exc_info=True,
+            )
 
 
 async def _recurring_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Periodic job that runs once per day to process due recurring transactions."""
-    await _process_due_recurring(context.application)
+    """JobQueue entry: hourly notifier sweep over ``recurring_logs``."""
+    await _notify_pending_recurring(context.application)
 
 
 async def _post_init(application: Application) -> None:
     db.log_app_event("app_started")
     log.info("Bot started successfully")
-    await _process_due_recurring(application)
+    # Catch up on any executions that landed while the bot was offline.
+    await _notify_pending_recurring(application)
 
 
 def main() -> None:
@@ -978,7 +1002,9 @@ def main() -> None:
 
     job_queue = application.job_queue
     if job_queue:
-        job_queue.run_repeating(_recurring_job, interval=86400, first=60)
+        # Hourly tick is enough — the web scheduler already executed the
+        # rule; we're only here to push DMs for unnotified recurring_logs.
+        job_queue.run_repeating(_recurring_job, interval=3600, first=60)
 
     application.run_polling()
 
