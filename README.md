@@ -30,7 +30,7 @@ flowchart LR
 ## Funcionalidades
 
 ### Web app
-- **Landing pública** + signup com usuário, e-mail (obrigatório) e senha
+- **Landing pública** + signup com usuário e senha (e-mail opcional no formulário, mas exigido antes do primeiro acesso à área logada via gate `/email-setup`)
 - **Login por usuário OU e-mail** (case-insensitive), com sessão por cookie HttpOnly e proteção CSRF
 - **Chat in-site** que entende linguagem natural (`"jantar 30 usd ontem"`, `"recebi 5000 salario"`) e categoriza automaticamente
 - **Dashboard completo**: KPIs, 6 gráficos (timeline, donut por categoria, barras, acumulado, comparison, histórico mensal), tabela top expenses, log com busca, export CSV/PDF
@@ -124,10 +124,11 @@ docker compose up -d web
 ## Cadastro e fluxo de e-mail
 
 1. Usuário acessa `/` → clica **Sign up**
-2. Preenche usuário + e-mail (opcional no form, mas obrigatório a partir do primeiro acesso à área logada) + senha
-3. Logged-in: pode trocar e-mail / senha / idioma / moeda / timezone em **Settings**
-4. Para vincular Telegram: **Settings → Link Telegram** → site gera código de 6 dígitos válido por 10 min → no bot envia `/start link_CODE`
-5. Usuário pode logar com **usuário** ou **e-mail** (case-insensitive)
+2. Preenche usuário + e-mail (opcional no form) + senha (mín. 6 caracteres)
+3. Se entrou sem e-mail, é redirecionado pra `/email-setup` antes de poder usar a área logada
+4. Já logado: pode trocar e-mail / senha / idioma / moeda / timezone em **Settings**
+5. Para vincular Telegram: **Settings → Link Telegram** → site gera código de 6 dígitos válido por 10 min → no bot envia `/start link_CODE`
+6. Login pode ser feito com **usuário** ou **e-mail** (case-insensitive)
 
 ---
 
@@ -156,10 +157,10 @@ Arquivo: `data/data.db` (criado e migrado automaticamente em `setup_database()`)
 
 Principais tabelas:
 
-- **`users`** — `id` (auto), `username`, `email`, `password_hash`, `telegram_id` (nullable, unique), `lang`, `is_admin`, `session_token`, `created_at`
-- **`transactions`** — `user_id`, `description`, `amount`, `amount_original`, `currency_code`, `category`, `category_id`, `type` (expense/income), `source` (web/telegram), `status`, `created_at`
-- **`user_preferences`** — `user_id`, `currency_default`, `timezone`, `confirmation_mode`
-- **`recurring_transactions`**, **`recurring_logs`** — regras periódicas
+- **`users`** — `id` (auto), `username`, `email` (unique partial index, case-insensitive), `password_hash`, `telegram_id` (nullable, unique), `lang`, `is_admin`, `session_token`, `created_at`
+- **`transactions`** — `user_id`, `description`, `amount_original`, `currency_code`, `amount_converted`, `exchange_rate`, `category`, `category_id`, `type` (expense/income), `source` (web/telegram), `status`, `confidence_score`, `recurring_id`, `created_at`
+- **`user_preferences`** — `user_id`, `currency_default`, `timezone`
+- **`recurring_transactions`**, **`recurring_logs`** — regras mensais (sempre executadas no dia configurado)
 - **`telegram_link_codes`** — códigos one-time usados em Settings → Link Telegram
 - **`exchange_rates`** — cotações para conversão multi-moeda
 - **`categories`**, **`category_aliases`** — taxonomia + sinônimos por idioma
@@ -198,7 +199,7 @@ Finance_bot/
 │   ├── categories.py          # infer_category_with_confidence
 │   ├── i18n.py                # pt/en/ja
 │   └── export.py              # CSV / PDF
-├── tests/                     # 352 tests
+├── tests/                     # ~350 unit tests (`pytest -q`)
 ├── data/                      # SQLite (volume)
 ├── docker-compose.yml
 ├── Dockerfile                 # bot

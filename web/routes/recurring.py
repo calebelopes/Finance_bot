@@ -26,7 +26,6 @@ def _shape_recurring(row: dict, lang: str) -> dict:
         "currency_code": cur,
         "category_display": cat_name(row.get("category", "Outros") or "Outros", lang),
         "is_income": row.get("type") == "income",
-        "frequency": row.get("frequency", "monthly"),
         "day_of_month": row.get("day_of_month"),
         "next_run": row.get("next_run"),
         "active": bool(row.get("active")),

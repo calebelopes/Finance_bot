@@ -275,7 +275,6 @@ class TestUserPreferences:
         prefs = db.get_user_preferences(800)
         assert prefs["currency_default"] == "BRL"
         assert prefs["timezone"] == "America/Sao_Paulo"
-        assert prefs["confirmation_mode"] == "auto"
 
     def test_set_preference(self):
         db.ensure_user_with_lang(801, "prefuser2")
@@ -288,6 +287,13 @@ class TestUserPreferences:
         with pytest.raises(ValueError, match="Unknown preference key"):
             db.set_user_preference(802, "invalid_key", "value")
 
+    def test_confirmation_mode_is_no_longer_a_preference(self):
+        """Legacy column purge regression guard: confirmation_mode used to be
+        accepted by ``set_user_preference`` but was never consumed in product."""
+        db.ensure_user_with_lang(805, "confuser")
+        with pytest.raises(ValueError, match="Unknown preference key"):
+            db.set_user_preference(805, "confirmation_mode", "ask")
+
     def test_set_timezone(self):
         db.ensure_user_with_lang(803, "tzuser")
         db.set_user_preference(803, "timezone", "Asia/Tokyo")
@@ -299,12 +305,6 @@ class TestUserPreferences:
         db.set_user_preference(804, "currency_default", "USD")
         prefs = db.get_user_preferences(804)
         assert prefs["currency_default"] == "USD"
-
-    def test_set_confirmation_mode(self):
-        db.ensure_user_with_lang(805, "confuser")
-        db.set_user_preference(805, "confirmation_mode", "ask")
-        prefs = db.get_user_preferences(805)
-        assert prefs["confirmation_mode"] == "ask"
 
 
 class TestCurrencies:

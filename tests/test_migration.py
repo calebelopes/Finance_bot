@@ -59,13 +59,20 @@ class TestUsersMigration:
         db_file = str(tmp_path / "unique.db")
         with patch.object(db, "_db_path", return_value=db_file):
             db.setup_database()
-            db.ensure_user_by_telegram_id(123, "u1", "pt")
-            # second user with the same telegram_id should not insert a new row
-            local_id_2 = db.ensure_user_by_telegram_id(123, "u1", "pt")
-            with db._connect() as conn:
-                rows = conn.execute("SELECT COUNT(*) AS c FROM users").fetchall()
-        assert rows[0]["c"] == 1
-        assert local_id_2 is not None
+            # Two distinct web users; only the first link to telegram_id=123
+            # should succeed.
+            user_a = db.create_web_user("alice", "pass1234")
+            user_b = db.create_web_user("bob", "pass1234")
+            assert db.link_telegram_to_user(user_a, 123) is True
+            assert db.link_telegram_to_user(user_b, 123) is False
+            # And the unique partial index actually rejects the duplicate
+            # at the SQL layer, not just the application guard.
+            with db._connect() as conn, pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO users (telegram_id, username, created_at) "
+                    "VALUES (?, ?, ?)",
+                    (123, "phantom", db._utc_now()),
+                )
 
     def test_telegram_link_codes_table_created(self, tmp_path):
         db_file = str(tmp_path / "codes.db")
@@ -90,23 +97,29 @@ def fresh_db(tmp_path):
 
 
 class TestTelegramResolution:
-    def test_create_new_telegram_user(self, fresh_db):
-        local_id = db.ensure_user_by_telegram_id(99001, "newuser", "pt")
-        assert local_id is not None
-        looked = db.get_user_by_telegram_id(99001)
-        assert looked is not None
-        assert looked["id"] == local_id
-        assert looked["username"] == "newuser"
-        assert looked["telegram_id"] == 99001
+    """Web-first contract: the bot never creates phantom Telegram-only users.
+
+    Linking still happens explicitly via ``link_telegram_to_user`` after
+    a user signs up on the web; ``refresh_telegram_user_metadata`` only
+    syncs username/lang on already-linked rows.
+    """
+
+    def test_unlinked_telegram_id_is_not_auto_provisioned(self, fresh_db):
+        result = db.refresh_telegram_user_metadata(99001, "newuser", "pt")
+        assert result is None
+        assert db.get_user_by_telegram_id(99001) is None
 
     def test_existing_user_returns_same_local_id(self, fresh_db):
-        a = db.ensure_user_by_telegram_id(99002, "u", "pt")
-        b = db.ensure_user_by_telegram_id(99002, "u", "pt")
-        assert a == b
+        local_id = db.create_web_user("u", "pass1234")
+        assert db.link_telegram_to_user(local_id, 99002) is True
+        a = db.refresh_telegram_user_metadata(99002, "u", "pt")
+        b = db.refresh_telegram_user_metadata(99002, "u", "pt")
+        assert a == b == local_id
 
     def test_username_update(self, fresh_db):
-        db.ensure_user_by_telegram_id(99003, "old_handle", "pt")
-        db.ensure_user_by_telegram_id(99003, "new_handle", None)
+        local_id = db.create_web_user("old_handle", "pass1234")
+        assert db.link_telegram_to_user(local_id, 99003) is True
+        db.refresh_telegram_user_metadata(99003, "new_handle", None)
         looked = db.get_user_by_telegram_id(99003)
         assert looked["username"] == "new_handle"
 
