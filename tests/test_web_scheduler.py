@@ -111,8 +111,9 @@ class TestLifespan:
     async def test_lifespan_disabled_flag_skips_scheduler(self, monkeypatch):
         """``WEB_SCHEDULER_DISABLED=1`` must keep the lifespan a no-op
         so test suites don't accidentally race the loop."""
-        from web.main import lifespan as web_lifespan
         from fastapi import FastAPI
+
+        from web.main import lifespan as web_lifespan
 
         monkeypatch.setenv("WEB_SCHEDULER_DISABLED", "1")
         app = FastAPI()
@@ -129,8 +130,9 @@ class TestLifespan:
     ):
         """When the disable flag is off, the lifespan must spin up the
         loop and tear it down cleanly on exit."""
-        from web.main import lifespan as web_lifespan
         from fastapi import FastAPI
+
+        from web.main import lifespan as web_lifespan
 
         monkeypatch.delenv("WEB_SCHEDULER_DISABLED", raising=False)
 
