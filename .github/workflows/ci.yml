@@ -119,8 +119,7 @@ jobs:
 
             echo "▸ Migrating .env (drop legacy DASHBOARD_URL, ensure WEB_URL)..."
             if [ -f .env ]; then
-              # 1. Remove the stale DASHBOARD_URL from the Streamlit era. Any
-              #    bot using the old fallback was pointing at a dead URL.
+              # 1. Remove any stale DASHBOARD_URL line so it can't shadow WEB_URL.
               if grep -q '^DASHBOARD_URL=' .env; then
                 sed -i.bak '/^DASHBOARD_URL=/d' .env
                 echo "  ✓ removed DASHBOARD_URL"

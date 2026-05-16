@@ -1,7 +1,6 @@
 """FastAPI entry point for the Finance web app.
 
-Replaces the Streamlit dashboard with a server-rendered Jinja2 + Tailwind +
-HTMX stack. Mobile-first.
+Server-rendered Jinja2 + Tailwind + HTMX stack. Mobile-first.
 """
 
 from __future__ import annotations
