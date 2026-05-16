@@ -183,9 +183,10 @@ class TestTelegramLinkFlow:
         ok = db.link_telegram_to_user(uid, 12345)
         assert ok is True
 
-        # 3. Future bot updates resolve to the same local user
-        from utils.auth import resolve_telegram_user
-        resolved_id, _ = resolve_telegram_user(12345, "alice", "pt")
+        # 3. Future bot updates resolve to the same local user (lookup-only,
+        #    no auto-creation).
+        from utils.auth import lookup_telegram_user
+        resolved_id, _ = lookup_telegram_user(12345, "pt")
         assert resolved_id == uid
 
     def test_expired_code_rejected(self, client_factory, tmp_path):

@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     env_file: .env
     environment:
-      - DASHBOARD_URL=${DASHBOARD_URL:-http://localhost:8000}
+      - WEB_URL=${WEB_URL:-${DASHBOARD_URL:-http://localhost:8000}}
     volumes:
       - ./data:/app/data
     restart: unless-stopped

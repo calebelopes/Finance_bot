@@ -28,7 +28,7 @@ from telegram.ext import (  # noqa: E402
 from telegram.request import HTTPXRequest  # noqa: E402
 
 from utils import categories, db  # noqa: E402
-from utils.auth import resolve_telegram_user  # noqa: E402
+from utils.auth import lookup_telegram_user  # noqa: E402
 from utils.export import generate_csv, generate_pdf  # noqa: E402
 from utils.i18n import (  # noqa: E402
     ALL_GREETINGS,
@@ -46,8 +46,13 @@ from utils.parser import parse_number_ptbr, parse_smart  # noqa: E402
 log = logging.getLogger(__name__)
 
 
-def _dashboard_url() -> str:
-    return os.getenv("DASHBOARD_URL", "http://localhost:8000")
+def _web_url() -> str:
+    """Public URL of the web app — used in /help and signup-redirect messages.
+
+    ``WEB_URL`` is the canonical name; ``DASHBOARD_URL`` is honored as a
+    backwards-compat alias from the Streamlit-dashboard era.
+    """
+    return os.getenv("WEB_URL") or os.getenv("DASHBOARD_URL", "http://localhost:8000")
 
 
 # ---------------------------------------------------------------------------
@@ -84,19 +89,46 @@ def _is_authorized(telegram_id: int) -> bool:
     return telegram_id in allowed_ids
 
 
-def _resolve_user_id(update: Update) -> tuple[int, str]:
-    """Resolve a Telegram update's user to (local_user_id, lang).
+def _detect_lang(update: Update) -> str:
+    """Detect lang from Telegram metadata. Used pre-login (no DB row required)."""
+    from utils.i18n import detect_lang
+    code = (update.effective_user.language_code if update.effective_user else None)
+    return detect_lang(code)
 
-    Thin Telegram-aware wrapper around utils.auth.resolve_telegram_user.
+
+def _resolve_linked_user(update: Update) -> tuple[int | None, str]:
+    """Thin wrapper around utils.auth.lookup_telegram_user.
+
+    Also refreshes the stored Telegram username when the user updates it
+    on Telegram's side, so the linked account stays in sync.
     """
     tg = update.effective_user
-    return resolve_telegram_user(tg.id, tg.username, tg.language_code)
+    local_id, lang = lookup_telegram_user(tg.id, tg.language_code)
+    if local_id is not None and tg.username:
+        existing = db.get_user_by_telegram_id(tg.id)
+        if existing and tg.username != existing["username"]:
+            # ensure_user_by_telegram_id acts as an UPDATE when a row already exists.
+            db.ensure_user_by_telegram_id(tg.id, tg.username, None)
+    return local_id, lang
 
 
-def _get_lang(update: Update) -> str:
-    """Get user's language, auto-detecting and persisting on first contact."""
-    _, lang = _resolve_user_id(update)
-    return lang
+async def _require_linked_user(
+    update: Update,
+) -> tuple[int, str] | None:
+    """Gate that every authenticated bot command goes through.
+
+    Returns (local_user_id, lang) when the user has a linked web account.
+    Otherwise replies with a "register on the web first" redirect and
+    returns None — the caller MUST stop processing.
+    """
+    if not _is_authorized(update.effective_user.id):
+        await update.message.reply_text(t("unauthorized", "pt"))
+        return None
+    local_id, lang = _resolve_linked_user(update)
+    if local_id is None:
+        await update.message.reply_text(t("tg_no_account", lang, web_url=_web_url()))
+        return None
+    return local_id, lang
 
 
 def _period_range_utc(period: str, user_id: int | None = None) -> tuple[str, str]:
@@ -184,9 +216,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(tg_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    local_id, lang = _resolve_user_id(update)
+    lang = _detect_lang(update)
 
-    # Deep-link from web /link-telegram: /start link_<code>
+    # Deep-link from web /settings → /link-telegram: /start link_<code>.
+    # This is the *only* way an account gets associated with a Telegram id;
+    # the linked web account already exists and we just attach the Telegram id.
     if context.args and context.args[0].startswith("link_"):
         code = context.args[0][5:]
         target_local_id = db.consume_telegram_link_code(code)
@@ -196,25 +230,37 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not db.link_telegram_to_user(target_local_id, tg_user.id):
             await update.message.reply_text(t("link_already_taken", lang))
             return
-        await update.message.reply_text(t("link_success", lang))
+        # Sync username/lang on the linked account from Telegram metadata.
+        db.ensure_user_by_telegram_id(tg_user.id, tg_user.username, lang)
+        linked_lang = db.get_user_lang(target_local_id) or lang
+        await update.message.reply_text(t("link_success", linked_lang))
         return
 
-    await update.message.reply_text(t("start", lang))
+    existing = db.get_user_by_telegram_id(tg_user.id)
+    if existing is None:
+        await update.message.reply_text(t("tg_no_account", lang, web_url=_web_url()))
+        return
+    await update.message.reply_text(t("start", existing["lang"] or lang))
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update.effective_user.id):
         await update.message.reply_text(t("unauthorized", "pt"))
         return
-    _, lang = _resolve_user_id(update)
-    await update.message.reply_text(t("help", lang, dashboard_url=_dashboard_url()))
+    local_id, lang = _resolve_linked_user(update)
+    if local_id is None:
+        # Help for not-yet-linked users: tell them where to register and how
+        # to link Telegram afterwards. Don't list any commands they can't use.
+        await update.message.reply_text(t("tg_no_account", lang, web_url=_web_url()))
+        return
+    await update.message.reply_text(t("help", lang, web_url=_web_url()))
 
 
 async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    _, lang = _resolve_user_id(update)
+    _, lang = gate
     keyboard = [
         [InlineKeyboardButton(label, callback_data=f"lang:{code}")]
         for code, label in LANG_LABELS.items()
@@ -231,16 +277,18 @@ async def cb_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chosen = query.data.split(":", 1)[1]
     if chosen not in SUPPORTED_LANGS:
         return
-    local_id = db.ensure_user_by_telegram_id(query.from_user.id, query.from_user.username, None)
-    db.set_lang(local_id, chosen)
+    existing = db.get_user_by_telegram_id(query.from_user.id)
+    if existing is None:
+        return
+    db.set_lang(existing["id"], chosen)
     await query.edit_message_text(t("lang_set", chosen))
 
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     try:
         start_utc, end_utc = _period_range_utc("today", local_id)
         txs = db.get_transactions(local_id, start_utc, end_utc)
@@ -253,10 +301,10 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     try:
         start_utc, end_utc = _period_range_utc("week", local_id)
         txs = db.get_transactions(local_id, start_utc, end_utc)
@@ -268,10 +316,10 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     try:
         start_utc, end_utc = _period_range_utc("month", local_id)
         txs = db.get_transactions(local_id, start_utc, end_utc)
@@ -285,10 +333,10 @@ async def cmd_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     try:
         start_utc, end_utc = _period_range_utc("month", local_id)
         now_local = datetime.datetime.now(_get_timezone(local_id))
@@ -335,10 +383,10 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     try:
         if not context.args or len(context.args) != 1:
             await update.message.reply_text(t("delete_usage", lang))
@@ -359,11 +407,11 @@ async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_setpassword(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    tg_user = update.effective_user
-    if not _is_authorized(tg_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
+    tg_user = update.effective_user
     try:
         if not context.args:
             await update.message.reply_text(t("password_usage", lang))
@@ -381,7 +429,7 @@ async def cmd_setpassword(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             pass
 
         await update.effective_chat.send_message(
-            t("password_set", lang, dashboard_url=_dashboard_url())
+            t("password_set", lang, web_url=_web_url())
         )
         log.info("Password set for user %s (local=%d, telegram=%d)", tg_user.username, local_id, tg_user.id)
     except Exception:
@@ -391,11 +439,11 @@ async def cmd_setpassword(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Toggle admin status. Only BOT_OWNER can run this."""
-    tg_user = update.effective_user
-    if not _is_authorized(tg_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
+    tg_user = update.effective_user
 
     owner_raw = os.getenv("BOT_OWNER", "").strip()
     if not owner_raw.isdigit() or tg_user.id != int(owner_raw):
@@ -419,10 +467,10 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     prefs = db.get_user_preferences(local_id)
     lines = [
         t("config_title", lang),
@@ -436,10 +484,10 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_setcurrency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    _, lang = _resolve_user_id(update)
+    _, lang = gate
     keyboard = [
         [InlineKeyboardButton(label, callback_data=f"currency:{code}")]
         for code, label in CURRENCY_LABELS.items()
@@ -456,17 +504,19 @@ async def cb_setcurrency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chosen = query.data.split(":", 1)[1].upper()
     if not db.is_valid_currency(chosen):
         return
-    local_id = db.ensure_user_by_telegram_id(query.from_user.id, query.from_user.username, None)
-    db.set_user_preference(local_id, "currency_default", chosen)
-    lang = db.get_user_lang(local_id)
+    existing = db.get_user_by_telegram_id(query.from_user.id)
+    if existing is None:
+        return
+    db.set_user_preference(existing["id"], "currency_default", chosen)
+    lang = existing["lang"] or "pt"
     await query.edit_message_text(t("setcurrency_done", lang, currency=chosen))
 
 
 async def cmd_settimezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    _, lang = _resolve_user_id(update)
+    _, lang = gate
     keyboard = [
         [InlineKeyboardButton(label, callback_data=f"tz:{tz_key}")]
         for tz_key, label in TIMEZONE_LABELS.items()
@@ -483,17 +533,19 @@ async def cb_settimezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chosen = query.data.split(":", 1)[1]
     if chosen not in TIMEZONE_LABELS:
         return
-    local_id = db.ensure_user_by_telegram_id(query.from_user.id, query.from_user.username, None)
-    db.set_user_preference(local_id, "timezone", chosen)
-    lang = db.get_user_lang(local_id)
+    existing = db.get_user_by_telegram_id(query.from_user.id)
+    if existing is None:
+        return
+    db.set_user_preference(existing["id"], "timezone", chosen)
+    lang = existing["lang"] or "pt"
     await query.edit_message_text(t("settimezone_done", lang, timezone=chosen))
 
 
 async def cmd_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     try:
         rules = db.get_recurring(local_id)
         if not rules:
@@ -516,10 +568,10 @@ async def cmd_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_addrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     try:
         if not context.args or len(context.args) < 2:
             await update.message.reply_text(t("addrecurring_usage", lang))
@@ -562,10 +614,10 @@ async def cmd_addrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def cmd_delrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     try:
         if not context.args or len(context.args) != 1:
             await update.message.reply_text(t("delrecurring_usage", lang))
@@ -585,10 +637,10 @@ async def cmd_delrecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def cmd_togglerecurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     try:
         if not context.args or len(context.args) != 1:
             await update.message.reply_text(t("togglerecurring_usage", lang))
@@ -610,10 +662,10 @@ async def cmd_togglerecurring(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     try:
         period = "month"
         if context.args:
@@ -651,10 +703,10 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_authorized(update.effective_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
+    gate = await _require_linked_user(update)
+    if gate is None:
         return
-    local_id, lang = _resolve_user_id(update)
+    local_id, lang = gate
     try:
         if not context.args or len(context.args) != 2:
             await update.message.reply_text(t("edit_usage", lang))
@@ -700,16 +752,15 @@ def _compute_backdated_ts(date_offset: int, user_id: int) -> str:
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    tg_user = update.effective_user
-    if not _is_authorized(tg_user.id):
-        await update.message.reply_text(t("unauthorized", "pt"))
-        return
-
     text = update.message.text if update.message else None
     if not text:
         return
 
-    local_id, lang = _resolve_user_id(update)
+    gate = await _require_linked_user(update)
+    if gate is None:
+        return
+    local_id, lang = gate
+    tg_user = update.effective_user
 
     normalized = " ".join(text.strip().lower().split())
     if normalized in ALL_GREETINGS:
@@ -812,8 +863,11 @@ async def cb_fixcat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except ValueError:
         return
     new_category = parts[2]
-    local_id = db.ensure_user_by_telegram_id(query.from_user.id, query.from_user.username, None)
-    lang = db.get_user_lang(local_id)
+    existing = db.get_user_by_telegram_id(query.from_user.id)
+    if existing is None:
+        return
+    local_id = existing["id"]
+    lang = existing["lang"] or "pt"
 
     if db.update_transaction_category(local_id, tx_id, new_category):
         cat_display = cat_name(new_category, lang)

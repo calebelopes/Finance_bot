@@ -41,7 +41,9 @@ flowchart LR
 - **Mobile-first**: bottom nav em telas pequenas, dark mode com fallback no `prefers-color-scheme`
 
 ### Bot do Telegram (opcional)
-Mesmos comandos de antes (`/today`, `/week`, `/month`, `/summary`, `/delete`, `/edit`, `/recurring`, etc.) — agora atrelados ao mesmo banco do web app. Para vincular sua conta web ao bot, vá em **Settings → Telegram** e siga o deep link.
+Mesmos comandos de antes (`/today`, `/week`, `/month`, `/summary`, `/delete`, `/edit`, `/recurring`, etc.) — agora atrelados ao mesmo banco do web app.
+
+**O site é o único lugar de cadastro.** O bot virou um companion: se alguém mandar `/start` (ou qualquer mensagem) no Telegram sem ter conta, o bot responde com o link do site pra criar a conta primeiro. Depois é só ir em **Settings → Telegram** no site e usar o deep link `/start link_<código>` pra vincular o Telegram à conta web.
 
 ---
 
@@ -74,9 +76,9 @@ Variáveis principais:
 | Variável | Onde é usada | Obrigatório |
 |----------|--------------|:-----------:|
 | `TOKEN` | Bot do Telegram (token do @BotFather) | Só pro bot |
-| `BOT_USERNAME` | Web — gera o deep link `t.me/<bot>?start=link_CODE` no Settings | Recomendado |
+| `BOT_USERNAME` | Web — gera o deep link `t.me/<bot>?start=link_CODE` no Settings. Default: `Folhinha_bot` | Não |
 | `WEB_PORT` | Porta do uvicorn (default 8000) | Não |
-| `DASHBOARD_URL` | URL pública do web app, mostrada nas mensagens do bot | Não |
+| `WEB_URL` | URL pública do web app, mostrada nas mensagens do bot (signup-redirect, /help). `DASHBOARD_URL` é aceito como alias depreciado. | Recomendado em produção |
 | `ALLOWED_USERS` | Lista de Telegram IDs autorizados a usar o bot | Não |
 | `BOT_OWNER` | Telegram ID do dono (ganha acesso ao `/admin`) | Não |
 | `TIMEZONE` | Timezone padrão para novos usuários | Não |
@@ -190,13 +192,13 @@ Finance_bot/
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── utils/
-│   ├── auth.py                # resolve_telegram_user (telegram-agnóstico)
+│   ├── auth.py                # lookup_telegram_user (look-up only; web is source of truth)
 │   ├── db.py                  # SQLite + migrations + CRUD
 │   ├── parser.py              # parse_smart (linguagem natural)
 │   ├── categories.py          # infer_category_with_confidence
 │   ├── i18n.py                # pt/en/ja
 │   └── export.py              # CSV / PDF
-├── tests/                     # 341 tests
+├── tests/                     # 352 tests
 ├── data/                      # SQLite (volume)
 ├── docker-compose.yml
 ├── Dockerfile                 # bot

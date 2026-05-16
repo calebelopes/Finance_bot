@@ -1,82 +1,82 @@
-"""Tests for the Telegram → local user resolver shared by bot and web layers."""
+"""Tests for the Telegram → local user *lookup* used by the bot.
+
+The web is the source of truth for accounts. The bot never auto-creates
+a row for an incoming Telegram user — it only looks one up. These tests
+exercise that contract end-to-end (lookup_telegram_user + DB schema).
+"""
 
 from unittest.mock import patch
 
 import pytest
 
 from utils import db
-from utils.auth import resolve_telegram_user
+from utils.auth import lookup_telegram_user
 
 
 @pytest.fixture(autouse=True)
 def fresh_db(tmp_path):
-    db_file = str(tmp_path / "bot_resolve.db")
+    db_file = str(tmp_path / "bot_lookup.db")
     with patch.object(db, "_db_path", return_value=db_file):
         db.setup_database()
         yield db_file
 
 
-class TestResolveTelegramUser:
-    def test_creates_new_local_user_on_first_contact(self):
-        local_id, lang = resolve_telegram_user(7777001, "alice", "en")
-
-        assert local_id is not None
+class TestLookupTelegramUser:
+    def test_unlinked_returns_none_and_detected_lang(self):
+        local_id, lang = lookup_telegram_user(7777001, "en")
+        assert local_id is None
         assert lang == "en"
-        looked = db.get_user_by_telegram_id(7777001)
-        assert looked is not None
-        assert looked["id"] == local_id
-        assert looked["username"] == "alice"
 
-    def test_returns_existing_local_id_on_repeat(self):
-        first_id, _ = resolve_telegram_user(7777002, "bob", "pt")
-        second_id, _ = resolve_telegram_user(7777002, "bob", "pt")
-        assert first_id == second_id
-
-    def test_uses_stored_lang_over_telegram_metadata(self):
-        # First contact registers user with lang detected from Telegram metadata
-        resolve_telegram_user(7777003, "carol", "en")
-        # User changes language preference manually
-        looked = db.get_user_by_telegram_id(7777003)
-        db.set_lang(looked["id"], "ja")
-
-        # Subsequent updates should now report the stored lang, not Telegram's
-        _, lang = resolve_telegram_user(7777003, "carol", "en")
-        assert lang == "ja"
-
-    def test_username_change_is_persisted(self):
-        resolve_telegram_user(7777004, "old_handle", "pt")
-        resolve_telegram_user(7777004, "new_handle", "pt")
-        looked = db.get_user_by_telegram_id(7777004)
-        assert looked["username"] == "new_handle"
-
-    def test_two_telegram_users_get_distinct_local_ids(self):
-        a, _ = resolve_telegram_user(7777005, "x", "pt")
-        b, _ = resolve_telegram_user(7777006, "y", "pt")
-        assert a != b
-
-    def test_local_ids_are_independent_of_telegram_ids(self):
-        # The whole point of the migration: huge Telegram ids don't become local ids
-        local_id, _ = resolve_telegram_user(8000000099, "huge", "pt")
-        looked = db.get_user_by_telegram_id(8000000099)
-        assert looked["telegram_id"] == 8000000099
-        assert looked["id"] == local_id
-        # local_id should be small (autoincrement starting low on a fresh db)
-        assert local_id < 100
-
-    def test_unknown_lang_falls_back_to_default(self):
-        _, lang = resolve_telegram_user(7777007, "zz", "klingon")
+    def test_unlinked_unknown_lang_falls_back_to_default(self):
+        local_id, lang = lookup_telegram_user(7777002, "klingon")
+        assert local_id is None
         assert lang == "pt"
 
-    def test_none_username_does_not_overwrite(self):
-        resolve_telegram_user(7777008, "set_handle", "pt")
-        resolve_telegram_user(7777008, None, "pt")
-        looked = db.get_user_by_telegram_id(7777008)
-        assert looked["username"] == "set_handle"
+    def test_linked_returns_local_id_and_stored_lang(self):
+        # Web user signs up first, then links Telegram.
+        web_id = db.create_web_user("alice", "secret123", email="a@example.com")
+        db.set_lang(web_id, "ja")
+        assert db.link_telegram_to_user(web_id, 7777003) is True
+
+        local_id, lang = lookup_telegram_user(7777003, "en")
+        assert local_id == web_id
+        # Stored lang takes precedence over Telegram metadata.
+        assert lang == "ja"
+
+    def test_lookup_does_not_create_row(self):
+        """The whole point of the new flow: bot lookups must NEVER insert."""
+        before = self._count_users()
+        lookup_telegram_user(8888888, "pt")
+        lookup_telegram_user(8888889, "en")
+        after = self._count_users()
+        assert before == after == 0
+
+    def test_two_linked_users_are_distinct(self):
+        a = db.create_web_user("aa", "pw_aaaaaa", email="aa@example.com")
+        b = db.create_web_user("bb", "pw_bbbbbb", email="bb@example.com")
+        db.link_telegram_to_user(a, 9001)
+        db.link_telegram_to_user(b, 9002)
+
+        ra, _ = lookup_telegram_user(9001, "pt")
+        rb, _ = lookup_telegram_user(9002, "pt")
+        assert ra == a
+        assert rb == b
+        assert ra != rb
+
+    @staticmethod
+    def _count_users() -> int:
+        with db._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()
+        return row["n"]
 
 
-class TestResolveInteropWithRestOfDB:
-    def test_resolved_id_works_with_store_transaction(self):
-        local_id, _ = resolve_telegram_user(7777010, "spender", "pt")
+class TestLinkInteropWithDB:
+    def test_lookup_after_link_works_with_transactions(self):
+        web_id = db.create_web_user("spender", "pw_secret", email="s@example.com")
+        db.link_telegram_to_user(web_id, 9100)
+
+        local_id, _ = lookup_telegram_user(9100, "pt")
+        assert local_id == web_id
 
         tx_id = db.store_transaction(
             local_id, "spender", "jantar", 30.0, "Refeição", "expense",
@@ -85,19 +85,9 @@ class TestResolveInteropWithRestOfDB:
         assert len(txs) == 1
         assert txs[0]["id"] == tx_id
 
-    def test_resolved_id_works_with_user_preferences(self):
-        local_id, _ = resolve_telegram_user(7777011, "configger", "ja")
-
-        prefs = db.get_user_preferences(local_id)
-        assert prefs["currency_default"] == "BRL"
-        db.set_user_preference(local_id, "currency_default", "JPY")
-        assert db.get_user_preferences(local_id)["currency_default"] == "JPY"
-
-    def test_link_existing_web_user(self):
-        # Web user signs up first, then links Telegram
-        web_id = db.create_web_user("websigner", "secretpass")
-        assert db.link_telegram_to_user(web_id, 7777012) is True
-
-        # Subsequent bot contact resolves to the same local id
-        resolved_id, _ = resolve_telegram_user(7777012, "websigner", "pt")
-        assert resolved_id == web_id
+    def test_link_collision_blocks_second_user(self):
+        a = db.create_web_user("aa", "pw_aaaaaa", email="aa@example.com")
+        b = db.create_web_user("bb", "pw_bbbbbb", email="bb@example.com")
+        assert db.link_telegram_to_user(a, 9200) is True
+        # Second account claiming the same Telegram id is rejected.
+        assert db.link_telegram_to_user(b, 9200) is False

@@ -207,8 +207,8 @@ BOT: dict[str, dict[str, str]] = {
             "  /edit <id> <valor> — editar valor\n"
             "\n"
             "🔑 Painel web:\n"
-            "  /setpassword <senha> — definir senha do dashboard\n"
-            "  {dashboard_url}\n"
+            "  /setpassword <senha> — definir senha do site\n"
+            "  {web_url}\n"
             "\n"
             "🔄 Recorrentes:\n"
             "  /recurring — listar recorrentes\n"
@@ -223,6 +223,15 @@ BOT: dict[str, dict[str, str]] = {
             "  /lang — idioma\n"
             "  /setcurrency — moeda padrão\n"
             "  /settimezone — fuso horário"
+        ),
+        "tg_no_account": (
+            "👋 Bem-vindo!\n"
+            "\n"
+            "Para usar o bot, primeiro crie sua conta no site:\n"
+            "  {web_url}\n"
+            "\n"
+            "Depois de criar a conta, vá em Ajustes → Vincular Telegram "
+            "para conectar este Telegram à sua conta."
         ),
         "greeting": (
             "Olá! 👋\n"
@@ -248,8 +257,8 @@ BOT: dict[str, dict[str, str]] = {
         "unauthorized": "⛔ Você não está autorizado a usar este bot.",
         "error": "Ocorreu um erro interno. Tente novamente.",
         "password_set": (
-            "🔑 Senha do painel definida com sucesso!\n"
-            "Acesse o dashboard: {dashboard_url}"
+            "🔑 Senha do site definida com sucesso!\n"
+            "Acesse: {web_url}"
         ),
         "password_too_short": "Senha muito curta. Use pelo menos 4 caracteres.",
         "password_usage": "Use: /setpassword <sua_senha>\nExemplo: /setpassword minha123",
@@ -343,8 +352,8 @@ BOT: dict[str, dict[str, str]] = {
             "  /edit <id> <amount> — edit amount\n"
             "\n"
             "🔑 Web dashboard:\n"
-            "  /setpassword <pass> — set dashboard password\n"
-            "  {dashboard_url}\n"
+            "  /setpassword <pass> — set your website password\n"
+            "  {web_url}\n"
             "\n"
             "🔄 Recurring:\n"
             "  /recurring — list recurring\n"
@@ -359,6 +368,15 @@ BOT: dict[str, dict[str, str]] = {
             "  /lang — language\n"
             "  /setcurrency — default currency\n"
             "  /settimezone — timezone"
+        ),
+        "tg_no_account": (
+            "👋 Welcome!\n"
+            "\n"
+            "To use the bot, first create your account on the website:\n"
+            "  {web_url}\n"
+            "\n"
+            "Once your account is ready, open Settings → Link Telegram to "
+            "connect this Telegram to it."
         ),
         "greeting": (
             "Hello! 👋\n"
@@ -384,8 +402,8 @@ BOT: dict[str, dict[str, str]] = {
         "unauthorized": "⛔ You are not authorized to use this bot.",
         "error": "An internal error occurred. Please try again.",
         "password_set": (
-            "🔑 Dashboard password set successfully!\n"
-            "Access the dashboard: {dashboard_url}"
+            "🔑 Website password set successfully!\n"
+            "Access the site: {web_url}"
         ),
         "password_too_short": "Password too short. Use at least 4 characters.",
         "password_usage": "Use: /setpassword <your_password>\nExample: /setpassword mypass123",
@@ -479,8 +497,8 @@ BOT: dict[str, dict[str, str]] = {
             "  /edit <id> <金額> — 金額を編集\n"
             "\n"
             "🔑 ダッシュボード:\n"
-            "  /setpassword <パスワード> — パスワード設定\n"
-            "  {dashboard_url}\n"
+            "  /setpassword <パスワード> — サイトのパスワードを設定\n"
+            "  {web_url}\n"
             "\n"
             "🔄 定期取引:\n"
             "  /recurring — 一覧表示\n"
@@ -495,6 +513,15 @@ BOT: dict[str, dict[str, str]] = {
             "  /lang — 言語\n"
             "  /setcurrency — デフォルト通貨\n"
             "  /settimezone — タイムゾーン"
+        ),
+        "tg_no_account": (
+            "👋 ようこそ！\n"
+            "\n"
+            "Botを使うには、まずウェブサイトでアカウントを作成してください：\n"
+            "  {web_url}\n"
+            "\n"
+            "アカウント作成後、設定 → Telegramを連携 から、"
+            "このTelegramをアカウントに紐付けてください。"
         ),
         "greeting": (
             "こんにちは！ 👋\n"
@@ -520,8 +547,8 @@ BOT: dict[str, dict[str, str]] = {
         "unauthorized": "⛔ このボットの使用権限がありません。",
         "error": "内部エラーが発生しました。もう一度お試しください。",
         "password_set": (
-            "🔑 ダッシュボードのパスワードを設定しました！\n"
-            "ダッシュボード: {dashboard_url}"
+            "🔑 サイトのパスワードを設定しました！\n"
+            "アクセス: {web_url}"
         ),
         "password_too_short": "パスワードが短すぎます。4文字以上にしてください。",
         "password_usage": "使い方: /setpassword <パスワード>\n例: /setpassword mypass123",

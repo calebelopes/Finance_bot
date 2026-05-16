@@ -1,28 +1,28 @@
 """Shared authentication helpers used by both bot and web layers.
 
-Pure-Python: no telegram or web framework imports, so it can be tested in isolation.
+Pure-Python: no telegram or web framework imports, so it can be tested in
+isolation. Web is the source of truth for accounts — the bot never
+auto-creates rows for incoming Telegram users; it only looks them up.
 """
+
+from __future__ import annotations
 
 from utils import db
 from utils.i18n import detect_lang
 
 
-def resolve_telegram_user(
+def lookup_telegram_user(
     telegram_id: int,
-    username: str | None,
-    language_code: str | None,
-) -> tuple[int, str]:
-    """Resolve a Telegram user to a local users.id, creating the row on first contact.
+    language_code: str | None = None,
+) -> tuple[int | None, str]:
+    """Look up the local user already linked to *telegram_id*.
 
-    Returns (local_user_id, lang). Used by the bot to map every Telegram update to
-    the local primary key, and by the web /link-telegram callback. Auto-detects
-    initial language from Telegram metadata only on first contact.
+    Returns (local_user_id, lang). When no link exists yet,
+    ``local_user_id`` is None and ``lang`` falls back to the language
+    detected from Telegram's ``language_code`` so any redirect-to-web
+    message lands in the user's preferred language.
     """
-    detected_lang = detect_lang(language_code)
     existing = db.get_user_by_telegram_id(telegram_id)
-    if existing:
-        if username and username != existing["username"]:
-            db.ensure_user_by_telegram_id(telegram_id, username, None)
-        return existing["id"], existing["lang"]
-    local_id = db.ensure_user_by_telegram_id(telegram_id, username, detected_lang)
-    return local_id, detected_lang
+    if existing is not None:
+        return existing["id"], existing["lang"] or detect_lang(language_code)
+    return None, detect_lang(language_code)
