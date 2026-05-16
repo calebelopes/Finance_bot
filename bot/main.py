@@ -49,10 +49,12 @@ log = logging.getLogger(__name__)
 def _web_url() -> str:
     """Public URL of the web app — used in /help and signup-redirect messages.
 
-    ``WEB_URL`` is the canonical name; ``DASHBOARD_URL`` is honored as a
-    backwards-compat alias from the Streamlit-dashboard era.
+    The legacy ``DASHBOARD_URL`` (Streamlit era, port 8501) is intentionally
+    not honored: stale copies in production .env files were causing the bot
+    to point users at a dead URL. The deploy script migrates the server's
+    .env to ``WEB_URL`` automatically.
     """
-    return os.getenv("WEB_URL") or os.getenv("DASHBOARD_URL", "http://localhost:8000")
+    return os.getenv("WEB_URL", "http://localhost:8000")
 
 
 # ---------------------------------------------------------------------------

@@ -101,10 +101,13 @@ jobs:
 
       - name: Build and restart containers
         uses: appleboy/ssh-action@v1
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: DEPLOY_HOST
           script: |
             cd ~/Finance_bot
             echo "▸ Version: $(cat VERSION)"
@@ -112,6 +115,22 @@ jobs:
             echo "▸ Backing up database..."
             if [ -f data/data.db ]; then
               cp data/data.db "data/data.db.bak.$(date +%Y%m%d_%H%M%S)"
+            fi
+
+            echo "▸ Migrating .env (drop legacy DASHBOARD_URL, ensure WEB_URL)..."
+            if [ -f .env ]; then
+              # 1. Remove the stale DASHBOARD_URL from the Streamlit era. Any
+              #    bot using the old fallback was pointing at a dead URL.
+              if grep -q '^DASHBOARD_URL=' .env; then
+                sed -i.bak '/^DASHBOARD_URL=/d' .env
+                echo "  ✓ removed DASHBOARD_URL"
+              fi
+              # 2. If WEB_URL isn't set yet, default it to the deploy host on
+              #    port 8000 — that's where docker-compose binds the web app.
+              if ! grep -q '^WEB_URL=' .env; then
+                printf '\nWEB_URL=http://%s:8000\n' "$DEPLOY_HOST" >> .env
+                echo "  ✓ added WEB_URL=http://$DEPLOY_HOST:8000"
+              fi
             fi
 
             echo "▸ Building containers..."
