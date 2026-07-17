@@ -2,7 +2,7 @@
 name = "finance-bot"
 # Kept in sync with the VERSION file, which is the source of truth and is
 # bumped automatically by CI on release (see .github/workflows/ci.yml).
-version = "2.2.0"
+version = "2.2.1"
 requires-python = ">=3.11"
 
 [tool.ruff]
