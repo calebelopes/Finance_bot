@@ -1,42 +1,39 @@
-"""Web authentication: session cookies + stateless CSRF tokens.
+"""Web authentication: session cookies + double-submit CSRF tokens.
 
 Sessions are stored on the ``users.session_token`` column (already part
-of the schema). CSRF tokens are *stateless* HMAC-signed strings — no
-server-side state is required, so the same token validates across
-multiple uvicorn workers, restarts, and (eventually) replicated
-instances. The previous implementation kept a process-local dict, which
-silently broke under any horizontal scale-out.
+of the schema).
 
-Token format
-------------
+CSRF protection uses the **double-submit cookie** pattern:
 
-    <issued_at_unix_ts>.<base64url(HMAC_SHA256(secret, issued_at))>
+* :class:`CSRFMiddleware` assigns each browser a random, unguessable
+  ``finance_csrf`` cookie (once, then reused).
+* Every form embeds that same value in a hidden ``csrf_token`` field
+  (rendered via :func:`issue_csrf_token`).
+* :func:`verify_csrf_token` accepts a request only when the submitted
+  field matches the cookie (constant-time compare).
 
-Validation checks (in order):
+Because the token is tied to a per-browser cookie that an attacker can
+neither read (SameSite + same-origin) nor set, a token minted in one
+browser is worthless in another — which the previous stateless
+HMAC-over-timestamp scheme did *not* guarantee (any freshly issued
+token validated for any user). ``SameSite=Lax`` remains as defense in
+depth.
 
-1. Two-segment shape with a numeric timestamp.
-2. Token age ≤ ``CSRF_TTL_SECONDS``.
-3. ``hmac.compare_digest`` over the recomputed signature.
-
-The HMAC secret is read from ``WEB_CSRF_SECRET``; missing it falls back
-to a per-process random secret. That fallback is intentionally
-ephemeral — production deployments must set the env var or all forms
-break on restart, which is loud and easy to spot.
+Cookie ``Secure`` flag is controlled by ``WEB_COOKIE_SECURE`` (set it to
+``1`` once the app is served over HTTPS).
 """
 
 from __future__ import annotations
 
-import base64
 import hmac
 import logging
 import os
 import secrets
-import time
-from hashlib import sha256
 from typing import Annotated, Optional
 
 from fastapi import Cookie, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from utils import db
@@ -46,74 +43,66 @@ log = logging.getLogger(__name__)
 SESSION_COOKIE = "finance_session"
 SESSION_MAX_AGE = 7 * 24 * 3600  # 7 days
 CSRF_COOKIE = "finance_csrf"
-CSRF_TTL_SECONDS = 4 * 3600
+CSRF_MAX_AGE = 7 * 24 * 3600  # 7 days
 
 
-_DEV_SECRET: bytes | None = None
+def _cookie_secure() -> bool:
+    """Whether to set the ``Secure`` flag on auth cookies.
 
-
-def _csrf_secret() -> bytes:
-    """Return the HMAC secret for CSRF signing.
-
-    Honors ``WEB_CSRF_SECRET`` first; falls back to a process-local
-    random secret if unset (good for local dev, bad for production —
-    we log a one-time warning so the operator notices).
+    Defaults to off so plain-HTTP local dev keeps working; set
+    ``WEB_COOKIE_SECURE=1`` in any TLS-terminated deployment so the
+    session and CSRF cookies are never sent over cleartext.
     """
-    env = os.getenv("WEB_CSRF_SECRET", "").strip()
-    if env:
-        return env.encode("utf-8")
-    global _DEV_SECRET
-    if _DEV_SECRET is None:
-        _DEV_SECRET = secrets.token_bytes(32)
-        log.warning(
-            "WEB_CSRF_SECRET is not set — using an ephemeral per-process "
-            "secret. CSRF tokens will not survive restarts or validate "
-            "across multiple workers. Set WEB_CSRF_SECRET in production."
-        )
-    return _DEV_SECRET
+    return os.getenv("WEB_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _b64url_encode(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+class CSRFMiddleware(BaseHTTPMiddleware):
+    """Ensure every browser carries a stable, random ``finance_csrf`` cookie.
+
+    The value is stashed on ``request.state.csrf_token`` so template
+    rendering (via :func:`issue_csrf_token`) embeds the exact value the
+    browser will submit back.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        token = request.cookies.get(CSRF_COOKIE)
+        is_new = not token
+        if is_new:
+            token = secrets.token_urlsafe(32)
+        request.state.csrf_token = token
+        response = await call_next(request)
+        if is_new:
+            response.set_cookie(
+                CSRF_COOKIE, token,
+                max_age=CSRF_MAX_AGE,
+                httponly=True,
+                samesite="lax",
+                secure=_cookie_secure(),
+                path="/",
+            )
+        return response
 
 
-def _b64url_decode(s: str) -> bytes:
-    pad = "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode(s + pad)
+def issue_csrf_token(request: Request) -> str:
+    """Return this browser's CSRF token (the double-submit cookie value).
+
+    Populated by :class:`CSRFMiddleware`; falls back to an ephemeral
+    value if the middleware is somehow absent so templates never render
+    an empty field.
+    """
+    token = getattr(request.state, "csrf_token", "")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        request.state.csrf_token = token
+    return token
 
 
-def _sign(ts_str: str) -> str:
-    sig = hmac.new(_csrf_secret(), ts_str.encode("ascii"), sha256).digest()
-    return _b64url_encode(sig)
-
-
-def issue_csrf_token() -> str:
-    """Mint a fresh stateless CSRF token bound to ``time.time()``."""
-    ts = str(int(time.time()))
-    return f"{ts}.{_sign(ts)}"
-
-
-def verify_csrf_token(token: str | None) -> bool:
-    """Validate a CSRF token: shape, age, and HMAC signature."""
-    if not token or "." not in token:
+def verify_csrf_token(request: Request, token: str | None) -> bool:
+    """Accept the request only if the submitted token matches the cookie."""
+    cookie_val = request.cookies.get(CSRF_COOKIE) or getattr(request.state, "csrf_token", "")
+    if not token or not cookie_val:
         return False
-    ts_str, sig_b64 = token.split(".", 1)
-    if not ts_str.isdigit():
-        return False
-
-    issued = int(ts_str)
-    age = time.time() - issued
-    # Allow a small ±60s skew for issuance to handle clock drift, but
-    # reject anything older than the TTL.
-    if age < -60 or age > CSRF_TTL_SECONDS:
-        return False
-
-    try:
-        provided_sig = _b64url_decode(sig_b64)
-    except (ValueError, base64.binascii.Error):
-        return False
-    expected_sig = _b64url_decode(_sign(ts_str))
-    return hmac.compare_digest(expected_sig, provided_sig)
+    return hmac.compare_digest(token, cookie_val)
 
 
 def set_session_cookie(response: Response, token: str) -> None:
@@ -122,7 +111,7 @@ def set_session_cookie(response: Response, token: str) -> None:
         max_age=SESSION_MAX_AGE,
         httponly=True,
         samesite="lax",
-        secure=False,  # tighten in production behind TLS
+        secure=_cookie_secure(),
         path="/",
     )
 

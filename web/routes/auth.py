@@ -44,7 +44,7 @@ async def signup_form(request: Request, lang: str | None = None):
     if redir:
         return redir
     chosen_lang = lang or _resolved_lang(None, request.headers.get("accept-language"))
-    csrf = issue_csrf_token()
+    csrf = issue_csrf_token(request)
     return templates.TemplateResponse(
         request,
         "auth/signup.html",
@@ -64,7 +64,7 @@ async def signup_submit(
     csrf_token: Annotated[str, Form()] = "",
     honeypot: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
     if honeypot:
         raise HTTPException(status_code=400, detail="bot detected")
@@ -97,7 +97,7 @@ async def signup_submit(
         errors["username"] = "signup_err_username_taken"
 
     if errors:
-        new_csrf = issue_csrf_token()
+        new_csrf = issue_csrf_token(request)
         return templates.TemplateResponse(
             request,
             "auth/signup.html",
@@ -114,7 +114,7 @@ async def signup_submit(
         email=email or None,
     )
     if user_id is None:
-        new_csrf = issue_csrf_token()
+        new_csrf = issue_csrf_token(request)
         return templates.TemplateResponse(
             request,
             "auth/signup.html",
@@ -137,7 +137,7 @@ async def login_form(request: Request, lang: str | None = None, next: str = "/ap
     if redir:
         return redir
     chosen_lang = lang or _resolved_lang(None, request.headers.get("accept-language"))
-    csrf = issue_csrf_token()
+    csrf = issue_csrf_token(request)
     return templates.TemplateResponse(
         request,
         "auth/login.html",
@@ -158,13 +158,13 @@ async def login_submit(
     csrf_token: Annotated[str, Form()] = "",
     lang: str | None = None,
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
 
     raw = (identifier or username or "").strip().lstrip("@")
     user = db.authenticate_by_identifier(raw, password or "")
     if user is None:
-        new_csrf = issue_csrf_token()
+        new_csrf = issue_csrf_token(request)
         chosen_lang = lang or _resolved_lang(None, request.headers.get("accept-language"))
         return templates.TemplateResponse(
             request,
@@ -194,7 +194,7 @@ async def email_setup_form(
         # Already has an email — nothing to do, send them along.
         safe_next = next if next.startswith("/") and not next.startswith("//") else "/app"
         return RedirectResponse(safe_next, status_code=303)
-    csrf = issue_csrf_token()
+    csrf = issue_csrf_token(request)
     return templates.TemplateResponse(
         request,
         "auth/email_setup.html",
@@ -219,7 +219,7 @@ async def email_setup_submit(
 ):
     if user is None:
         return RedirectResponse("/login", status_code=303)
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
 
     email = (email or "").strip()
@@ -234,7 +234,7 @@ async def email_setup_submit(
         errors["email"] = "signup_err_email_taken"
 
     if errors:
-        new_csrf = issue_csrf_token()
+        new_csrf = issue_csrf_token(request)
         return templates.TemplateResponse(
             request,
             "auth/email_setup.html",
@@ -263,20 +263,6 @@ async def logout(
         user = db.get_user_by_session(finance_session)
         if user:
             db.clear_session(user["id"])
-    response = RedirectResponse("/", status_code=303)
-    clear_session_cookie(response)
-    return response
-
-
-@router.get("/logout")
-async def logout_get(
-    request: Request,
-    user: Annotated[Optional[dict], Depends(get_current_user)] = None,
-    finance_session: Annotated[Optional[str], Cookie()] = None,
-):
-    """Allow GET /logout for convenience (e.g., footer link)."""
-    if finance_session and user:
-        db.clear_session(user["id"])
     response = RedirectResponse("/", status_code=303)
     clear_session_cookie(response)
     return response

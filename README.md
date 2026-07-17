@@ -79,6 +79,7 @@ Variáveis principais:
 | `BOT_USERNAME` | Web — gera o deep link `t.me/<bot>?start=link_CODE` no Settings. Default: `Folhinha_bot` | Não |
 | `WEB_PORT` | Porta do uvicorn (default 8000) | Não |
 | `WEB_URL` | URL pública do web app, mostrada nas mensagens do bot (signup-redirect, /help). | Recomendado em produção |
+| `WEB_COOKIE_SECURE` | `1` para marcar os cookies de sessão/CSRF como `Secure` (só trafegam por HTTPS). | Obrigatório sob HTTPS |
 | `ALLOWED_USERS` | Lista de Telegram IDs autorizados a usar o bot | Não |
 | `BOT_OWNER` | Telegram ID do dono (ganha acesso ao `/admin`) | Não |
 | `TIMEZONE` | Timezone padrão para novos usuários | Não |

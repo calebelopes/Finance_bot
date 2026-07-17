@@ -36,6 +36,14 @@ def _db_path() -> str:
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(_db_path())
     conn.execute("PRAGMA foreign_keys = ON;")
+    # Wait (rather than raise "database is locked") when another connection
+    # holds a write lock. The web request threads and the background
+    # recurring scheduler thread both write to the same file, so brief
+    # contention is expected; 5s is plenty for SQLite's fast writes.
+    conn.execute("PRAGMA busy_timeout = 5000;")
+    # WAL lets readers proceed concurrently with a single writer, which
+    # matters once the scheduler and web handlers overlap.
+    conn.execute("PRAGMA journal_mode = WAL;")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -114,6 +122,21 @@ def setup_database() -> None:  # noqa: C901
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_id "
             "ON users(telegram_id) WHERE telegram_id IS NOT NULL"
         )
+        # Case-insensitive unique index on username. Signup already checks
+        # ``username_exists`` in application code, but that has a TOCTOU race
+        # under concurrent requests and there was previously no DB-level
+        # backstop. Partial (WHERE username IS NOT NULL) so legacy rows
+        # without a username don't collide. Best-effort: pre-existing
+        # duplicates would block creation, so we log and continue.
+        try:
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower "
+                "ON users(LOWER(username)) WHERE username IS NOT NULL"
+            )
+        except sqlite3.IntegrityError:
+            log.exception(
+                "Could not create unique index on users.username — duplicates exist"
+            )
         if "email" not in user_cols:
             cur.execute("ALTER TABLE users ADD COLUMN email TEXT;")
         # Case-insensitive partial unique index on email. We use LOWER(email)
@@ -960,11 +983,16 @@ def create_web_user(
         return None
     hashed = _hash_password(password)
     with _connect() as conn:
-        cur = conn.execute(
-            """INSERT INTO users (username, password_hash, lang, email, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (username, hashed, lang, email, _utc_now()),
-        )
+        try:
+            cur = conn.execute(
+                """INSERT INTO users (username, password_hash, lang, email, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (username, hashed, lang, email, _utc_now()),
+            )
+        except sqlite3.IntegrityError:
+            # Lost a race with a concurrent signup on the same username/email
+            # (the unique indexes are the source of truth). Treat as conflict.
+            return None
         local_id = cur.lastrowid
         conn.execute(
             """INSERT INTO user_preferences (user_id, currency_default, timezone)

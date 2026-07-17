@@ -49,7 +49,7 @@ async def list_recurring(
             "lang": lang,
             "user": user,
             "rules": rules,
-            "csrf_token": issue_csrf_token(),
+            "csrf_token": issue_csrf_token(request),
             "user_currency": prefs.get("currency_default", "BRL"),
         },
     )
@@ -65,7 +65,7 @@ async def add_recurring(
     day: Annotated[str, Form()] = "",
     csrf_token: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
 
     description = (description or "").strip()
@@ -98,11 +98,12 @@ async def add_recurring(
 
 @router.post("/recurring/{rec_id}/toggle")
 async def toggle_recurring(
+    request: Request,
     rec_id: int,
     user: Annotated[dict, Depends(require_user_with_email)],
     csrf_token: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
     if db.toggle_recurring(user["id"], rec_id) is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -111,11 +112,12 @@ async def toggle_recurring(
 
 @router.post("/recurring/{rec_id}/delete")
 async def delete_recurring(
+    request: Request,
     rec_id: int,
     user: Annotated[dict, Depends(require_user_with_email)],
     csrf_token: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
     if not db.delete_recurring(user["id"], rec_id):
         raise HTTPException(status_code=404, detail="not found")

@@ -47,7 +47,7 @@ def _settings_context(request: Request, user: dict) -> dict:
         "prefs": prefs,
         "telegram_id": telegram_id,
         "email": email,
-        "csrf_token": issue_csrf_token(),
+        "csrf_token": issue_csrf_token(request),
         "messages": [],
         "errors": {},
         "bot_username": _bot_username(),
@@ -72,7 +72,7 @@ async def update_prefs(
     timezone: Annotated[str, Form()] = "America/Sao_Paulo",
     csrf_token: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
 
     if lang in SUPPORTED_LANGS:
@@ -92,7 +92,7 @@ async def change_email(
     email: Annotated[str, Form()] = "",
     csrf_token: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
 
     new_email = (email or "").strip()
@@ -119,7 +119,7 @@ async def change_password(
     new_password_confirm: Annotated[str, Form()] = "",
     csrf_token: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
 
     ctx = _settings_context(request, user)
@@ -144,7 +144,7 @@ async def generate_link_code(
     user: Annotated[dict, Depends(require_user)],
     csrf_token: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
 
     code = db.create_telegram_link_code(user["id"], ttl_minutes=10)
@@ -160,7 +160,7 @@ async def unlink_telegram(
     user: Annotated[dict, Depends(require_user)],
     csrf_token: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
     db.unlink_telegram(user["id"])
     return RedirectResponse("/settings?unlinked=1", status_code=303)
@@ -173,7 +173,7 @@ async def delete_account(
     confirm_username: Annotated[str, Form()] = "",
     csrf_token: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
     if confirm_username.strip().lower() != (user["username"] or "").lower():
         ctx = _settings_context(request, user)

@@ -8,9 +8,11 @@
       <span class="inline-flex w-8 h-8 items-center justify-center rounded-lg bg-brand-500 text-white">$</span>
       <span>Finance</span>
     </a>
-    <a href="/logout" class="text-sm font-medium text-slate-700 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
-      {{ d('nav_logout', lang) }}
-    </a>
+    <form method="post" action="/logout" class="m-0">
+      <button type="submit" class="text-sm font-medium text-slate-700 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
+        {{ d('nav_logout', lang) }}
+      </button>
+    </form>
   </div>
 </header>
 {% endblock %}

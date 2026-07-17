@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from markupsafe import escape
 
 from utils import categories, db
 from utils.i18n import ALL_GREETINGS, cat_name, fmt_currency
@@ -117,7 +118,7 @@ async def app_index(
             "active": "app",
             "lang": lang,
             "user": user,
-            "csrf_token": issue_csrf_token(),
+            "csrf_token": issue_csrf_token(request),
             "kpi": _kpi_strip(user["id"], lang, currency),
             "transactions": _recent_transactions(user["id"], lang, currency),
             "user_currency": currency,
@@ -132,7 +133,7 @@ async def chat_send(
     text: Annotated[str, Form()] = "",
     csrf_token: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
 
     lang = user.get("lang", "pt")
@@ -253,7 +254,7 @@ async def chat_send(
             "is_income": is_income,
             "kpi": kpi,
             "user_currency": user_currency,
-            "csrf_token": issue_csrf_token(),
+            "csrf_token": issue_csrf_token(request),
             "suggestions": suggestions,
             "low_confidence": 0 < confidence < _LOW_CONFIDENCE_THRESHOLD,
             "converted_str": (
@@ -302,15 +303,24 @@ async def fix_tx_category(
     category: Annotated[str, Form()],
     csrf_token: Annotated[str, Form()] = "",
 ):
-    if not verify_csrf_token(csrf_token):
+    if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
+
+    # Only accept known category keys. This both keeps the data clean and
+    # closes an XSS hole: the value is echoed back into an HTML fragment
+    # below, so arbitrary input must never reach it.
+    if db.get_category_id(category) is None:
+        raise HTTPException(status_code=400, detail="unknown category")
 
     if not db.update_transaction_category(user["id"], tx_id, category):
         raise HTTPException(status_code=404, detail="not found")
 
     lang = user.get("lang", "pt")
+    msg = templates.env.globals["t"](
+        "category_corrected", lang, id=tx_id, category=cat_name(category, lang),
+    )
+    # Defense in depth: escape before returning raw HTML (this response is
+    # not rendered through Jinja's autoescaping template path).
     return HTMLResponse(
-        f'<span class="text-xs text-green-600 dark:text-green-400">'
-        f'{templates.env.globals["t"]("category_corrected", lang, id=tx_id, category=cat_name(category, lang))}'
-        f'</span>'
+        f'<span class="text-xs text-green-600 dark:text-green-400">{escape(msg)}</span>'
     )
