@@ -83,6 +83,46 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Content-Security-Policy. Deliberately allowlists exactly the external
+# origins the templates load (Tailwind Play CDN, htmx via unpkg, Plotly
+# CDN) and permits inline/eval for scripts+styles because the current
+# frontend relies on inline <script> blocks and the Tailwind Play CDN's
+# in-browser JIT (which uses eval). It still blocks framing, restricts
+# form targets, and forbids arbitrary third-party origins. Set
+# ``WEB_DISABLE_CSP=1`` to turn it off if a fork self-hosts assets under
+# a stricter policy.
+_CSP = "; ".join([
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
+    "https://cdn.tailwindcss.com https://unpkg.com https://cdn.plot.ly",
+])
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach defensive response headers (clickjacking, MIME sniffing, CSP)."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        headers = response.headers
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        headers.setdefault("X-Frame-Options", "DENY")
+        headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        headers.setdefault(
+            "Permissions-Policy", "geolocation=(), microphone=(), camera=()"
+        )
+        if os.getenv("WEB_DISABLE_CSP", "").strip().lower() not in {"1", "true", "yes", "on"}:
+            headers.setdefault("Content-Security-Policy", _CSP)
+        return response
+
+
 def issue_csrf_token(request: Request) -> str:
     """Return this browser's CSRF token (the double-submit cookie value).
 

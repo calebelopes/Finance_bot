@@ -22,7 +22,7 @@ from web.templates_setup import templates
 router = APIRouter()
 
 
-_VALID_CURRENCIES = {"BRL", "USD", "EUR", "JPY", "GBP"}
+_VALID_CURRENCIES = db.SUPPORTED_CURRENCIES
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -34,12 +34,9 @@ def _bot_username() -> str:
 
 def _settings_context(request: Request, user: dict) -> dict:
     prefs = db.get_user_preferences(user["id"])
-    with db._connect() as conn:
-        row = conn.execute(
-            "SELECT telegram_id, email FROM users WHERE id = ?", (user["id"],)
-        ).fetchone()
-    telegram_id = row["telegram_id"] if row else None
-    email = row["email"] if row else None
+    meta = db.get_user_contact_meta(user["id"])
+    telegram_id = meta["telegram_id"]
+    email = meta["email"]
 
     return {
         "lang": user.get("lang", "pt"),
@@ -180,20 +177,7 @@ async def delete_account(
         ctx["errors"] = {"delete_confirm": "settings_err_delete_confirm"}
         return templates.TemplateResponse(request, "settings/index.html", ctx, status_code=400)
 
-    user_id = user["id"]
-    with db._connect() as conn:
-        conn.execute("DELETE FROM transactions WHERE user_id = ?", (user_id,))
-        conn.execute(
-            "DELETE FROM recurring_logs WHERE recurring_id IN "
-            "(SELECT id FROM recurring_transactions WHERE user_id = ?)",
-            (user_id,),
-        )
-        conn.execute("DELETE FROM recurring_transactions WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM user_preferences WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM usage_events WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM telegram_link_codes WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
-        conn.commit()
+    db.delete_user_account(user["id"])
 
     response = RedirectResponse("/", status_code=303)
     clear_session_cookie(response)

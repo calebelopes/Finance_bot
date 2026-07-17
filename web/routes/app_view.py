@@ -89,18 +89,9 @@ def _format_tx_for_template(
 
 def _recent_transactions(user_id: int, lang: str, currency: str, limit: int = 30) -> list[dict]:
     """Return the N most recent transactions for the chat sidebar."""
-    with db._connect() as conn:
-        rows = conn.execute(
-            """SELECT id, description, amount_original, currency_code, category, type,
-                      amount_converted, exchange_rate, created_at
-               FROM transactions
-               WHERE user_id = ? AND COALESCE(status, 'confirmed') != 'deleted'
-               ORDER BY datetime(created_at) DESC
-               LIMIT ?""",
-            (user_id, limit),
-        ).fetchall()
+    rows = db.get_recent_transactions(user_id, limit)
     tz = _user_tz(user_id)
-    return [_format_tx_for_template(dict(r), lang, tz, currency) for r in rows]
+    return [_format_tx_for_template(r, lang, tz, currency) for r in rows]
 
 
 @router.get("/app", response_class=HTMLResponse)

@@ -76,6 +76,11 @@ _CURRENCY_SEEDS = [
     ("GBP", "British Pound", "£"),
 ]
 
+# Single source of truth for the currency codes the app accepts. Derived
+# from the seed list so the web-layer validators and the DB seed can never
+# drift apart. Prefer this over ad-hoc literal sets in route modules.
+SUPPORTED_CURRENCIES: frozenset[str] = frozenset(code for code, _name, _sym in _CURRENCY_SEEDS)
+
 
 def setup_database() -> None:  # noqa: C901
     with _connect() as conn:
@@ -628,6 +633,65 @@ def get_summary_by_category(
     return [dict(r) for r in rows]
 
 
+def get_recent_transactions(user_id: int, limit: int = 30) -> list[dict]:
+    """Return the *limit* most recent non-deleted transactions (newest first)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT id, description, amount_original, currency_code, category, type,
+                      amount_converted, exchange_rate, created_at
+               FROM transactions
+               WHERE user_id = ? AND COALESCE(status, 'confirmed') != 'deleted'
+               ORDER BY datetime(created_at) DESC
+               LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_transactions_detailed(user_id: int, start_utc: str, end_utc: str) -> list[dict]:
+    """Return full transaction rows in [start_utc, end_utc) for the dashboard.
+
+    Wider column set than :func:`get_transactions` (includes conversion,
+    source, status and confidence) since the dashboard and exports need it.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT id, description, amount_original, currency_code,
+                      amount_converted, exchange_rate,
+                      category, category_id, type, source, status,
+                      confidence_score, created_at
+               FROM transactions
+               WHERE user_id = ? AND created_at >= ? AND created_at < ?
+                 AND COALESCE(status,'confirmed') != 'deleted'
+               ORDER BY created_at ASC""",
+            (user_id, start_utc, end_utc),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_monthly_totals(user_id: int, months: int = 12) -> list[dict]:
+    """Return per-month {month:'YYYY-MM', expenses, income} for the last *months*."""
+    today = datetime.datetime.now(datetime.UTC).date()
+    cutoff = (today.replace(day=1) - datetime.timedelta(days=31 * months)).isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT
+                 substr(created_at, 1, 7) AS month,
+                 SUM(CASE WHEN COALESCE(type,'expense')='expense' THEN amount_original ELSE 0 END) AS expenses,
+                 SUM(CASE WHEN type='income' THEN amount_original ELSE 0 END) AS income
+               FROM transactions
+               WHERE user_id = ? AND COALESCE(status,'confirmed') != 'deleted'
+                 AND created_at >= ?
+               GROUP BY month
+               ORDER BY month""",
+            (user_id, cutoff),
+        ).fetchall()
+    return [
+        {"month": r["month"], "expenses": r["expenses"] or 0, "income": r["income"] or 0}
+        for r in rows
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Categories
 # ---------------------------------------------------------------------------
@@ -1101,6 +1165,40 @@ def clear_user_email(user_id: int) -> None:
     """Remove the email column for a user (used by tests / admin flows)."""
     with _connect() as conn:
         conn.execute("UPDATE users SET email = NULL WHERE id = ?", (user_id,))
+        conn.commit()
+
+
+def get_user_contact_meta(user_id: int) -> dict:
+    """Return ``{'telegram_id', 'email'}`` for a user (values may be None)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT telegram_id, email FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+    if not row:
+        return {"telegram_id": None, "email": None}
+    return {"telegram_id": row["telegram_id"], "email": row["email"]}
+
+
+def delete_user_account(user_id: int) -> None:
+    """Hard-delete a user and every row that references them.
+
+    SQLite can't retrofit ``ON DELETE CASCADE`` onto the legacy (no-cascade)
+    foreign keys via ALTER TABLE, so we delete in FK-safe order explicitly.
+    This is the canonical account-deletion path (see the FK CASCADE note in
+    ``setup_database``).
+    """
+    with _connect() as conn:
+        conn.execute("DELETE FROM transactions WHERE user_id = ?", (user_id,))
+        conn.execute(
+            "DELETE FROM recurring_logs WHERE recurring_id IN "
+            "(SELECT id FROM recurring_transactions WHERE user_id = ?)",
+            (user_id,),
+        )
+        conn.execute("DELETE FROM recurring_transactions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM user_preferences WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM usage_events WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM telegram_link_codes WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
 
 

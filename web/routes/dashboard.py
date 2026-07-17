@@ -249,38 +249,11 @@ def _build_monthly_chart(rows: list[dict], lang: str) -> dict:
 
 def _load_monthly_totals(user_id: int, months: int = 12) -> list[dict]:
     """Return per-month {month: 'YYYY-MM', expenses, income} for the last *months*."""
-    today = datetime.datetime.now(datetime.UTC).date()
-    cutoff = (today.replace(day=1) - datetime.timedelta(days=31 * months)).isoformat()
-    with db._connect() as conn:
-        rows = conn.execute(
-            """SELECT
-                 substr(created_at, 1, 7) AS month,
-                 SUM(CASE WHEN COALESCE(type,'expense')='expense' THEN amount_original ELSE 0 END) AS expenses,
-                 SUM(CASE WHEN type='income' THEN amount_original ELSE 0 END) AS income
-               FROM transactions
-               WHERE user_id = ? AND COALESCE(status,'confirmed') != 'deleted'
-                 AND created_at >= ?
-               GROUP BY month
-               ORDER BY month""",
-            (user_id, cutoff),
-        ).fetchall()
-    return [{"month": r["month"], "expenses": r["expenses"] or 0, "income": r["income"] or 0} for r in rows]
+    return db.get_monthly_totals(user_id, months)
 
 
 def _load_transactions(user_id: int, start_iso: str, end_iso: str) -> list[dict]:
-    with db._connect() as conn:
-        rows = conn.execute(
-            """SELECT id, description, amount_original, currency_code,
-                      amount_converted, exchange_rate,
-                      category, category_id, type, source, status,
-                      confidence_score, created_at
-               FROM transactions
-               WHERE user_id = ? AND created_at >= ? AND created_at < ?
-                 AND COALESCE(status,'confirmed') != 'deleted'
-               ORDER BY created_at ASC""",
-            (user_id, start_iso, end_iso),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    return db.get_transactions_detailed(user_id, start_iso, end_iso)
 
 
 @router.get("/dashboard", response_class=HTMLResponse)

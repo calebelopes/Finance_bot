@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Annotated, Optional
 
@@ -18,14 +19,32 @@ from web.auth import (
     redirect_unauthenticated,
     verify_csrf_token,
 )
+from web.ratelimit import RateLimiter, client_key
 from web.templates_setup import templates
 
 router = APIRouter()
 
 
-_VALID_CURRENCIES = {"BRL", "USD", "EUR", "JPY", "GBP"}
+_VALID_CURRENCIES = db.SUPPORTED_CURRENCIES
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Per-IP throttles on the credential endpoints. Defaults are generous
+# enough that no human hits them, but they cap scripted brute-force /
+# credential-stuffing (each attempt costs a PBKDF2 verification).
+_login_limiter = RateLimiter(
+    max_attempts=int(os.getenv("WEB_LOGIN_MAX_ATTEMPTS", "10")),
+    window_seconds=float(os.getenv("WEB_LOGIN_WINDOW_SECONDS", "300")),
+)
+_signup_limiter = RateLimiter(
+    max_attempts=int(os.getenv("WEB_SIGNUP_MAX_ATTEMPTS", "5")),
+    window_seconds=float(os.getenv("WEB_SIGNUP_WINDOW_SECONDS", "3600")),
+)
+# Escape hatch so the test suite (and anyone who wants to) can turn the
+# throttle off without fighting shared per-process counters.
+_RATE_LIMIT_ENABLED = os.getenv("WEB_RATE_LIMIT_ENABLED", "1").strip().lower() not in {
+    "0", "false", "no", "off",
+}
 
 
 def _resolved_lang(form_lang: str | None, header_lang: str | None) -> str:
@@ -64,6 +83,23 @@ async def signup_submit(
     csrf_token: Annotated[str, Form()] = "",
     honeypot: Annotated[str, Form()] = "",
 ):
+    if _RATE_LIMIT_ENABLED:
+        allowed, retry = _signup_limiter.check(client_key(request))
+        if not allowed:
+            chosen_lang = _resolved_lang(lang, request.headers.get("accept-language"))
+            return templates.TemplateResponse(
+                request,
+                "auth/signup.html",
+                {
+                    "lang": chosen_lang, "csrf_token": issue_csrf_token(request),
+                    "user": None, "errors": {},
+                    "values": {"username": username, "email": email,
+                               "lang": lang, "currency": currency},
+                    "form_error": "err_rate_limited",
+                },
+                status_code=429,
+                headers={"Retry-After": str(retry)},
+            )
     if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
     if honeypot:
@@ -158,6 +194,21 @@ async def login_submit(
     csrf_token: Annotated[str, Form()] = "",
     lang: str | None = None,
 ):
+    key = client_key(request)
+    if _RATE_LIMIT_ENABLED:
+        allowed, retry = _login_limiter.check(key)
+        if not allowed:
+            chosen_lang = lang or _resolved_lang(None, request.headers.get("accept-language"))
+            return templates.TemplateResponse(
+                request,
+                "auth/login.html",
+                {
+                    "lang": chosen_lang, "csrf_token": issue_csrf_token(request),
+                    "user": None, "next": next, "error": "err_rate_limited",
+                },
+                status_code=429,
+                headers={"Retry-After": str(retry)},
+            )
     if not verify_csrf_token(request, csrf_token):
         raise HTTPException(status_code=400, detail="invalid csrf token")
 
@@ -176,6 +227,9 @@ async def login_submit(
             status_code=401,
         )
 
+    # Successful auth: clear this client's throttle so a legitimate user
+    # who fat-fingered their password a few times isn't penalised.
+    _login_limiter.reset(key)
     safe_next = next if next.startswith("/") and not next.startswith("//") else "/app"
     response = RedirectResponse(safe_next, status_code=303)
     login_user(response, user["id"])

@@ -22,7 +22,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from utils import db  # noqa: E402
-from web.auth import CSRFMiddleware  # noqa: E402
+from web.auth import CSRFMiddleware, SecurityHeadersMiddleware  # noqa: E402
 from web.routes import admin as admin_routes  # noqa: E402
 from web.routes import app_view as app_view_routes  # noqa: E402
 from web.routes import auth as auth_routes  # noqa: E402
@@ -73,6 +73,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Finance", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 app.add_middleware(CSRFMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 db.setup_database()
 
