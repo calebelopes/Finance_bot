@@ -21,27 +21,8 @@
     })();
   </script>
 
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            brand: {
-              50:  '#ecfdf5', 100: '#d1fae5', 200: '#a7f3d0',
-              500: '#10b981', 600: '#059669', 700: '#047857', 900: '#064e3b',
-            },
-          },
-          fontFamily: {
-            sans: ['system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
-          },
-        },
-      },
-    };
-  </script>
-  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
   <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/js/vendor/htmx.min.js" defer></script>
 
   {% block head_extra %}{% endblock %}
 </head>
@@ -56,6 +37,7 @@
   {% block bottomnav %}{% endblock %}
 
   <script src="/static/js/app.js" defer></script>
+  <script src="/static/js/vendor/preline.js" defer></script>
   {% block body_extra %}{% endblock %}
 </body>
 </html>

@@ -37,3 +37,7 @@ htmlcov/
 
 # Ruff
 .ruff_cache/
+
+# Node / front-end build (compiled assets under web/static are committed)
+node_modules/
+npm-debug.log*

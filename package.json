@@ -1,0 +1,20 @@
+{
+  "name": "finance-web",
+  "version": "2.2.0",
+  "private": true,
+  "description": "Front-end build for the Finance web app: Tailwind CSS (compiled) + Preline UI, self-hosted (no CDNs).",
+  "scripts": {
+    "vendor": "node ./web/scripts/copy-vendor.mjs",
+    "build:css": "tailwindcss -i ./web/assets/app.css -o ./web/static/css/app.css --minify",
+    "watch:css": "tailwindcss -i ./web/assets/app.css -o ./web/static/css/app.css --watch",
+    "build": "npm run vendor && npm run build:css"
+  },
+  "dependencies": {
+    "htmx.org": "^1.9.12",
+    "preline": "^2.5.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.9",
+    "tailwindcss": "^3.4.14"
+  }
+}

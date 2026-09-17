@@ -1,6 +1,14 @@
 // App-wide tiny helpers. Most interactivity is handled by HTMX directly.
 
 (function () {
+  // Re-initialise Preline components on content HTMX swaps in (its own
+  // auto-init only fires once on DOMContentLoaded).
+  document.addEventListener("htmx:afterSwap", function () {
+    if (window.HSStaticMethods && typeof window.HSStaticMethods.autoInit === "function") {
+      window.HSStaticMethods.autoInit();
+    }
+  });
+
   // Auto-scroll chat stream to bottom after HTMX swaps in new messages.
   document.addEventListener("htmx:afterSwap", function (e) {
     const stream = document.getElementById("chat-stream");

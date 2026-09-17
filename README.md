@@ -92,6 +92,21 @@ python -m uvicorn web.main:app --host 127.0.0.1 --port 8000 --reload
 
 Abra http://localhost:8000 no navegador, crie sua conta, e pronto. O e-mail é obrigatório no primeiro acesso (qualquer conta sem e-mail é redirecionada para `/email-setup`).
 
+> O front-end usa **Tailwind CSS compilado + Preline UI**, servidos localmente (sem CDNs). O CSS já vem compilado em `web/static/css/app.css`, então o app roda sem Node. Só é preciso rebuildar se você alterar templates/classes (veja abaixo).
+
+### 3.1. Front-end (Tailwind + Preline)
+
+O CSS é gerado a partir de `web/assets/app.css` + `tailwind.config.js` e os bundles do htmx/Preline são copiados para `web/static/js/vendor/`. Após mudar templates ou o config, rebuilde:
+
+```bash
+npm install      # primeira vez
+npm run build    # gera web/static/css/app.css + vendor JS
+# ou, sem Node local:
+docker run --rm -v "$PWD":/app -w /app node:20-slim sh -c "npm install && npm run build"
+```
+
+No deploy via Docker isso é automático: `web/Dockerfile` compila os assets num estágio Node antes de montar a imagem final.
+
 ### 4. (Opcional) Rode o bot do Telegram
 
 Em outro terminal:

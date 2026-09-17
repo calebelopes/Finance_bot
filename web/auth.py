@@ -83,26 +83,26 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         return response
 
 
-# Content-Security-Policy. Deliberately allowlists exactly the external
-# origins the templates load (Tailwind Play CDN, htmx via unpkg, Plotly
-# CDN) and permits inline/eval for scripts+styles because the current
-# frontend relies on inline <script> blocks and the Tailwind Play CDN's
-# in-browser JIT (which uses eval). It still blocks framing, restricts
-# form targets, and forbids arbitrary third-party origins. Set
-# ``WEB_DISABLE_CSP=1`` to turn it off if a fork self-hosts assets under
-# a stricter policy.
+# Content-Security-Policy. Tailwind is now compiled to a static stylesheet
+# and htmx + Preline are self-hosted, so the only remaining third-party
+# origin is the Plotly CDN (dashboard/admin charts). ``'unsafe-eval'`` is
+# gone (it was only needed for the old Tailwind Play CDN's in-browser JIT).
+# ``'unsafe-inline'`` stays for scripts (the theme bootstrap + chart-init
+# blocks are inline) and styles (Plotly injects inline styles). It still
+# blocks framing, restricts form targets, and forbids arbitrary origins.
+# Set ``WEB_DISABLE_CSP=1`` to turn it off if a fork self-hosts assets
+# under a different policy.
 _CSP = "; ".join([
     "default-src 'self'",
     "base-uri 'self'",
     "object-src 'none'",
     "frame-ancestors 'none'",
     "form-action 'self'",
-    "img-src 'self' data:",
+    "img-src 'self' data: blob:",
     "font-src 'self'",
     "connect-src 'self'",
-    "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com",
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
-    "https://cdn.tailwindcss.com https://unpkg.com https://cdn.plot.ly",
+    "style-src 'self' 'unsafe-inline'",
+    "script-src 'self' 'unsafe-inline' https://cdn.plot.ly",
 ])
 
 
